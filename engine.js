@@ -1,7 +1,7 @@
 export const KEY = 'random_event_director_v1';
 export const DEFAULTS = Object.freeze({ enabled: false, triggerProbability: 25, targetCount: 6,
     refillThreshold: 2, expiryTurns: 7, contextMessages: 16, contextChars: 24000,
-    timeoutSeconds: 45, useCurrentModel: true, model: '', worldNotes: '', directorPreset: null });
+    timeoutSeconds: 45, useCurrentModel: true, model: '', worldNotes: '', directorPreset: null, headerPreset: null });
 const REPLAY = new Set(['regenerate', 'swipe', 'continue', 'append']);
 const ALLOWED = new Set(['normal', 'regenerate', 'swipe', 'continue', 'append']);
 const clamp = (value, fallback, min, max) => Number.isFinite(Number(value))
@@ -14,7 +14,7 @@ export function config(raw = {}) {
         contextChars: clamp(raw.contextChars, 24000, 1000, 60000),
         timeoutSeconds: clamp(raw.timeoutSeconds, 45, 5, 180),
         useCurrentModel: raw.useCurrentModel !== false, model: String(raw.model || '').slice(0, 200),
-        worldNotes: String(raw.worldNotes || '').slice(0, 12000), directorPreset: activePreset(raw.directorPreset) };
+        worldNotes: String(raw.worldNotes || '').slice(0, 12000), directorPreset: activePreset(raw.directorPreset), headerPreset: activeHeader(raw.headerPreset) };
 }
 export function randomInt(max, cryptoApi = globalThis.crypto) {
     if (!Number.isSafeInteger(max) || max < 1 || max > 2 ** 32) throw new Error('Invalid random range');
@@ -81,7 +81,7 @@ export function poolPrompt(ctx, state, count) {
     }
     const card = ctx.characters?.[ctx.characterId] || {};
     const background = [card.description, card.personality, card.scenario, state.worldNotes].filter(Boolean).join('\n').slice(0, 12000);
-    return [{ role: 'system', content: generatorText(state.directorPreset, count, ctx) },
+    return [...headerMessages(state.headerPreset, ctx), { role: 'system', content: generatorText(state.directorPreset, count, ctx) },
     { role: 'user', content: JSON.stringify({ background, recent_story: recent,
         avoid_repeating: [...state.eventPool, ...Object.values(state.cycles).map(c => c.event).filter(Boolean)]
             .slice(-30).map(e => e.content) }) }];
@@ -89,8 +89,8 @@ export function poolPrompt(ctx, state, count) {
 
 export class Director {
     constructor({ context, request, inject, persist, changed = () => {}, log = console.warn,
-        rng = randomInt, makeId = uuid, now = Date.now, defer = fn => setTimeout(fn, 0), presets = null }) {
-        Object.assign(this, { context, request, inject, persist, changed, log, rng, makeId, now, defer, presets });
+        rng = randomInt, makeId = uuid, now = Date.now, defer = fn => setTimeout(fn, 0), presets = null, headers = null, connection = null }) {
+        Object.assign(this, { context, request, inject, persist, changed, log, rng, makeId, now, defer, presets, headers, connection });
         this.run = null; this.busy = false; this.fill = null; this.epoch = 0; this.disposed = false;
     }
     state(ctx = this.context()) {
@@ -106,6 +106,7 @@ export class Director {
             throw new Error('聊天中的随机事件状态损坏；请关闭插件并重置状态');
         }
         Object.assign(state, config(state));
+        discussionState(state);
         return state;
     }
     save(ctx, state) {
@@ -128,6 +129,29 @@ export class Director {
         if (s.enabled && !this.busy) void this.refill();
     }
     cancelFill() { this.epoch++; this.fill?.controller.abort(); this.fill = null; }
+    applyHeader(raw) {
+        if (this.busy) throw new Error('请等待主生成结束后再应用头部预设');
+        const next = raw ? normalizeHeader(raw) : null, ctx = this.context(), s = this.state(ctx);
+        if (!s) throw new Error('请先打开一个聊天');
+        if (next && !next.id) next.id = this.makeId();
+        if (JSON.stringify([s.headerPreset?.messages, s.headerPreset?.generation]) !== JSON.stringify([next?.messages, next?.generation])) {
+            this.cancelFill(); s.eventPool = []; s.refillAttempt = null;
+        }
+        s.headerPreset = next; s.error = ''; this.save(ctx, s);
+        this.discussion?.settingsChanged();
+        if (s.enabled) void this.refill();
+    }
+    applyConnection(raw) {
+        if (this.busy) throw new Error('请等待主生成结束后再保存副 AI 配置');
+        if (!this.connection) throw new Error('副 AI 连接配置不可用');
+        const old = this.connection.read(), next = this.connection.save(raw);
+        if (JSON.stringify(old) !== JSON.stringify(next)) {
+            this.cancelFill(); const ctx = this.context(), s = this.state(ctx);
+            if (s) { s.eventPool = []; s.refillAttempt = null; s.error = ''; this.save(ctx, s); if (s.enabled) void this.refill(); }
+            this.discussion?.settingsChanged();
+        }
+        this.changed(); return next;
+    }
     applyPreset(raw) {
         const preset = normalizePreset(raw), ctx = this.context(), s = this.state(ctx);
         if (!s) throw new Error('请先打开一个聊天');
@@ -139,6 +163,7 @@ export class Director {
             if (s.pendingEvent && !s.pendingEvent.injection) s.pendingEvent.injection = hiddenPrompt(s.pendingEvent.event, old, ctx);
         }
         s.directorPreset = { ...preset }; s.error = ''; this.save(ctx, s);
+        if (different) this.discussion?.settingsChanged();
         if (different && s.enabled) void this.refill();
         return preset;
     }
@@ -218,18 +243,25 @@ export class Director {
         if (!cycle && REPLAY.has(type) && !s.pendingEvent?.cycleKey) return;
         if (!cycle) {
             if (assistantTurns(ctx.chat) - s.eventPoolGenerationTurn >= s.expiryTurns) s.eventPool = [];
-            let event = null;
+            let event = null, guideId = null;
             const pendingInjection = s.pendingEvent && !s.pendingEvent.cycleKey ? s.pendingEvent.injection : null;
-            if (s.pendingEvent && !s.pendingEvent.cycleKey) event = s.pendingEvent.event;
-            else if (this.rng(10000) < s.triggerProbability * 100) event = choose(s.eventPool, this.rng);
+            if (s.pendingEvent && !s.pendingEvent.cycleKey) { event = s.pendingEvent.event; guideId = s.pendingEvent.guideId || null; }
+            else if (this.rng(10000) < s.triggerProbability * 100) {
+                const guide = s.discussion.guide;
+                if (guide) {
+                    event = choose(guide.pool, this.rng); guideId = event ? guide.id : null;
+                    // Never block the main generation or substitute an ordinary event for an accepted direction.
+                    if (!event && !s.discussion.error) this.defer(() => { void this.discussion?.prepareGuide(); });
+                } else event = choose(s.eventPool, this.rng);
+            }
             if (event) {
                 event.status = 'pending';
                 s.eventPool = s.eventPool.filter(e => e.id !== event.id);
-                s.pendingEvent = { cycleKey: key, event };
+                s.pendingEvent = { cycleKey: key, event, guideId };
             }
             const injection = event ? (pendingInjection || hiddenPrompt(event, s.directorPreset, ctx)) : '';
             if (event) s.pendingEvent.injection = injection;
-            cycle = s.cycles[key] = { event, injection, status: 'pending', createdAt: this.now() };
+            cycle = s.cycles[key] = { event, injection, guideId, status: 'pending', createdAt: this.now() };
             this.save(ctx, s);
         }
         run.cycleKey = key;
@@ -255,6 +287,10 @@ export class Director {
         if (c.status !== 'consumed') {
             c.status = 'consumed';
             if (c.event) { c.event.status = 'consumed'; s.recentEvent = { ...c.event }; }
+            if (c.guideId && s.discussion.guide?.id === c.guideId) {
+                s.discussion.lastUsed = '已使用'; s.discussion.guide = null;
+                this.discussion?.guideTask?.controller.abort();
+            }
             if (s.pendingEvent?.cycleKey === run.cycleKey) s.pendingEvent = null;
         }
         this.clear(); this.save(ctx, s);
@@ -267,6 +303,7 @@ export class Director {
     }
     stop() { if (this.run) this.run.stopped = true; this.clear(); this.busy = false; }
     switchChat() {
+        this.discussion?.cancel();
         this.cancelFill(); this.clear(); this.run = null; this.busy = false;
         this.changed();
         // No automatic API request merely from browsing between conversations.
@@ -292,6 +329,14 @@ export class Director {
         const ctx = this.context(), s = this.state(ctx);
         if (!s?.enabled || this.busy) return false;
         if (s.pendingEvent) return true;
+        if (s.discussion.guide) {
+            if (!s.discussion.guide.pool.length) await this.discussion?.prepareGuide();
+            if (this.context().chatMetadata !== ctx.chatMetadata || !s.enabled || this.busy) return false;
+            const guide = s.discussion.guide, event = guide && choose(guide.pool, this.rng);
+            if (!event) return false;
+            s.pendingEvent = { cycleKey: null, event, guideId: guide.id, injection: hiddenPrompt(event, s.directorPreset, ctx) };
+            this.save(ctx, s); return true;
+        }
         if (assistantTurns(ctx.chat) - s.eventPoolGenerationTurn >= s.expiryTurns) s.eventPool = [];
         if (!s.eventPool.length) await this.refill(true);
         if (this.context().chatMetadata !== ctx.chatMetadata || !s.enabled || this.busy) return false;
@@ -301,6 +346,8 @@ export class Director {
         s.pendingEvent = { cycleKey: null, event, injection: hiddenPrompt(event, s.directorPreset, ctx) };
         this.save(ctx, s); return true;
     }
-    dispose() { this.disposed = true; this.cancelFill(); this.clear(); this.run = null; }
+    dispose() { this.disposed = true; this.discussion?.cancel(); this.cancelFill(); this.clear(); this.run = null; }
 }
 import { activePreset, generatorText, injectionText, normalizePreset } from './presets.js';
+import { activeHeader, normalizeHeader, headerMessages } from './headers.js';
+import { discussionState } from './discussion-state.js';

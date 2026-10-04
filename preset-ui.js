@@ -1,5 +1,4 @@
 import { DEFAULT_PRESET, activePreset, normalizePreset } from './presets.js';
-import { completionPresets } from './api.js';
 
 export function mountPresetUI(host, director, context, doc) {
     host.innerHTML = `<details class="red-presets"><summary>导演预设管理</summary>
@@ -10,8 +9,6 @@ export function mountPresetUI(host, director, context, doc) {
       <label class="red-column">副 AI 事件生成提示词<textarea class="text_pole" rows="7" data-preset-field="generatorPrompt"></textarea></label>
       <label class="red-column">主 AI 隐藏注入模板<textarea class="text_pole" rows="7" data-preset-field="injectionTemplate"></textarea></label>
       <p class="red-help">副 AI 必须含 {{count}}，注入模板必须含 {{event}}。可用：{{char}}、{{user}}；注入还可用 {{title}}、{{type}}。固定 JSON 输出协议与“不预定结果/玩家行动、不公开隐藏系统”规则始终保留。</p>
-      <label class="red-column">副 AI 酒馆生成参数预设（可选）<select class="text_pole" data-preset-field="completionPresetName"></select></label>
-      <p class="red-help">使用该预设的生成参数，不切换主聊天配置。导演提示词由上面的编辑器提供，不导入整套主聊天提示词链。</p>
       <div class="red-actions"><button type="button" class="menu_button" data-preset-action="apply">应用到本聊天</button>
       <button type="button" class="menu_button" data-preset-action="save">保存预设</button>
       <button type="button" class="menu_button" data-preset-action="copy">另存为</button>
@@ -25,11 +22,13 @@ export function mountPresetUI(host, director, context, doc) {
       <button type="button" class="menu_button" data-preset-action="import">导入上述 JSON</button>
       <label class="red-column">导入预设文件<input type="file" accept=".json,application/json" data-preset-field="file"></label>
       <p class="red-help">导入只新增，同名自动编号；不会覆盖已有预设或自动应用。默认预设可另存，不能覆盖或删除。</p>
-      </div></details><p data-preset-role="notice" aria-live="polite"></p></div></details>`;
+      </div></details><div class="red-add"><button type="button" class="menu_button" data-preset-action="new">添加自定义导演预设</button>
+      <p class="red-help">创建一个新预设，在上方填写名称和提示词，再点击保存。</p></div>
+      <p data-preset-role="notice" aria-live="polite"></p></div></details>`;
     const root = host.querySelector('.red-presets'), get = key => root.querySelector(`[data-preset-field="${key}"]`);
     const role = key => root.querySelector(`[data-preset-role="${key}"]`);
     let draft = { ...DEFAULT_PRESET }, owner = null, snapshot = '', disposed = false;
-    let libraryFingerprint = '', parameterFingerprint = '';
+    let libraryFingerprint = '';
     function options(select, rows, chosen) {
         select.replaceChildren();
         for (const row of rows) { const option = doc.createElement('option'); option.value = row.value; option.textContent = row.label; select.append(option); }
@@ -38,11 +37,10 @@ export function mountPresetUI(host, director, context, doc) {
     function paint() {
         for (const key of ['name', 'generatorPrompt', 'injectionTemplate']) get(key).value = draft[key];
         get('selected').value = draft.id;
-        get('completionPresetName').value = draft.completionPresetName;
     }
     function read() {
         return normalizePreset({ ...draft, name: get('name').value, generatorPrompt: get('generatorPrompt').value,
-            injectionTemplate: get('injectionTemplate').value, completionPresetName: get('completionPresetName').value });
+            injectionTemplate: get('injectionTemplate').value });
     }
     function catalog() { return director.presets?.list() || [{ ...DEFAULT_PRESET }]; }
     function refresh() {
@@ -52,7 +50,7 @@ export function mountPresetUI(host, director, context, doc) {
             const serial = JSON.stringify(active);
             if (owner !== state?.owner || snapshot !== serial) {
                 draft = { ...active }; owner = state?.owner; snapshot = serial;
-                role('notice').textContent = ''; libraryFingerprint = ''; parameterFingerprint = '';
+                role('notice').textContent = ''; libraryFingerprint = '';
                 paint();
             }
             role('active').textContent = `当前聊天预设：${active.name}`;
@@ -62,16 +60,9 @@ export function mountPresetUI(host, director, context, doc) {
             if (fingerprint !== libraryFingerprint) {
                 options(get('selected'), presets.map(p => ({ value: p.id, label: p.name })), draft.id); libraryFingerprint = fingerprint;
             }
-            const params = completionPresets(context());
-            const paramKey = JSON.stringify([context().mainApi, params, draft.completionPresetName]);
-            if (paramKey !== parameterFingerprint) {
-                const rows = [{ value: '', label: '使用当前连接参数（默认温度 0.8）' }, ...params.map(name => ({ value: name, label: name }))];
-                if (draft.completionPresetName && !params.includes(draft.completionPresetName)) rows.push({ value: draft.completionPresetName, label: `${draft.completionPresetName}（当前 API 未找到）` });
-                options(get('completionPresetName'), rows, draft.completionPresetName); parameterFingerprint = paramKey;
-            }
             for (const control of root.querySelectorAll('[data-preset-field], [data-preset-action]')) {
                 control.disabled = !state || director.busy;
-                if (['save', 'copy', 'delete', 'import', 'export-all'].includes(control.dataset.presetAction) || control.dataset.presetField === 'file') control.disabled ||= !director.presets;
+                if (['save', 'copy', 'delete', 'import', 'export-all', 'new'].includes(control.dataset.presetAction) || control.dataset.presetField === 'file') control.disabled ||= !director.presets;
                 if (control.dataset.presetAction === 'delete') control.disabled ||= draft.id === DEFAULT_PRESET.id || !catalog().some(p => p.id === draft.id);
             }
         } catch (e) { role('notice').textContent = e.message; }
@@ -86,14 +77,14 @@ export function mountPresetUI(host, director, context, doc) {
         try {
             if (key === 'selected') {
                 draft = { ...(catalog().find(p => p.id === get('selected').value) || draft) };
-                parameterFingerprint = ''; refresh(); paint(); role('notice').textContent = '已载入编辑器；点击“应用到本聊天”后生效。';
+                refresh(); paint(); role('notice').textContent = '已载入编辑器；点击“应用到本聊天”后生效。';
             } else if (key === 'file' && event.target.files?.[0]) {
                 const file = event.target.files[0], origin = director.state()?.owner;
                 if (file.size > 1500000) throw new Error('预设文件不能超过 1.5 MB');
                 const source = await file.text();
                 if (disposed || director.state()?.owner !== origin) return;
                 imported(source); event.target.value = '';
-            } else if (['name', 'generatorPrompt', 'injectionTemplate', 'completionPresetName'].includes(key)) {
+            } else if (['name', 'generatorPrompt', 'injectionTemplate'].includes(key)) {
                 draft[key] = event.target.value;
             }
         } catch (e) { role('notice').textContent = e.message; }
@@ -102,7 +93,10 @@ export function mountPresetUI(host, director, context, doc) {
         const action = event.target.closest('[data-preset-action]')?.dataset.presetAction;
         if (!action) return;
         try {
-            if (action === 'apply') {
+            if (action === 'new') {
+                draft = { ...DEFAULT_PRESET, id: 'new', name: '新的导演预设' }; libraryFingerprint = '';
+                refresh(); paint(); get('name').focus(); role('notice').textContent = '已新建草稿；修改名称和提示词后点击“保存预设”。';
+            } else if (action === 'apply') {
                 director.applyPreset(read()); refresh(); role('notice').textContent = '预设已应用。新事件池使用新规则，已准备事件及重生成保留原模板。';
             } else if (action === 'save' || action === 'copy') {
                 draft = director.presets.save(read(), action === 'copy'); libraryFingerprint = '';

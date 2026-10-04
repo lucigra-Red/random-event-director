@@ -4,22 +4,26 @@ export function mountUI(director, context, doc = document) {
     doc.querySelector('#random_event_director_panel')?.remove();
     const root = doc.createElement('details');
     root.id = 'random_event_director_panel'; root.className = 'red-panel';
-    root.innerHTML = `<summary>随机事件导演 <small>V0.1.1</small></summary>
+    root.innerHTML = `<summary>随机事件导演 <small>V0.1.2</small></summary>
       <div class="red-body">
-      <p class="red-help">副 AI 提出事件，本地掷骰，主 AI 自然演出。设置与事件池按聊天保存。</p>
+      <p class="red-help">为当前聊天加入偶发情境。先配置副 AI，再开启随机事件。</p>
       <label><input type="checkbox" data-setting="enabled"> 开启本聊天的随机事件导演</label>
       <div class="red-grid">
         <label>随机事件概率（%）<input class="text_pole" type="number" min="0" max="100" data-setting="triggerProbability"></label>
+        <label>近期消息数量<input class="text_pole" type="number" min="1" max="40" data-setting="contextMessages"></label>
+      </div>
+      <details><summary>高级设置</summary><div class="red-grid">
         <label>事件池目标数量<input class="text_pole" type="number" min="1" max="20" data-setting="targetCount"></label>
         <label>自动补充阈值<input class="text_pole" type="number" min="0" max="19" data-setting="refillThreshold"></label>
-        <label>过期 Assistant 回合<input class="text_pole" type="number" min="1" max="50" data-setting="expiryTurns"></label>
-        <label>近期消息数量<input class="text_pole" type="number" min="1" max="40" data-setting="contextMessages"></label>
+        <label>事件池保留回合<input class="text_pole" type="number" min="1" max="50" data-setting="expiryTurns"></label>
         <label>副 AI 超时（秒）<input class="text_pole" type="number" min="5" max="180" data-setting="timeoutSeconds"></label>
-      </div>
-      <label><input type="checkbox" data-setting="useCurrentModel"> 使用当前酒馆 API 的当前模型</label>
-      <label>副 AI 模型<input class="text_pole" data-setting="model" list="red-models" placeholder="选择已有模型或填写同一 API 下的模型 ID"></label>
+      </div></details>
+      <div data-role="connection-host"></div>
+      <div data-role="current-model" class="red-body"><label><input type="checkbox" data-setting="useCurrentModel"> 使用当前酒馆 API 的当前模型</label>
+      <label class="red-column">副 AI 模型<input class="text_pole" data-setting="model" list="red-models" placeholder="选择已有模型或填写同一 API 下的模型 ID"></label>
       <datalist id="red-models"></datalist>
-      <p class="red-help">取消上方勾选可指定同一连接中的其他模型；不会切换主聊天模型或保存 API Key。</p>
+      <p class="red-help">取消上方勾选可指定当前连接中的其他模型。</p></div>
+      <div data-role="header-host"></div>
       <div data-role="preset-host"></div>
       <details><summary>补充世界观（可选）</summary><textarea class="text_pole" rows="4" data-setting="worldNotes" placeholder="副 AI 自动读取角色描述、人格、场景和近期对话。关键世界书设定可在此补充。"></textarea></details>
       <p data-role="count"></p><p data-role="pending"></p><p data-role="recent"></p>
@@ -29,8 +33,10 @@ export function mountUI(director, context, doc = document) {
       <p data-role="status" aria-live="polite"></p>
       </div>`;
     host.append(root);
+    const connectionUI = mountConnectionUI(root.querySelector('[data-role="connection-host"]'), director, doc);
+    const headerUI = mountHeaderUI(root.querySelector('[data-role="header-host"]'), director, context, doc);
     const presetUI = mountPresetUI(root.querySelector('[data-role="preset-host"]'), director, context, doc);
-    let notice = '', lastOwner = null;
+    let notice = '', lastOwner = null, workspace;
     const field = name => root.querySelector(`[data-role="${name}"]`);
     function refresh() {
         let s;
@@ -55,7 +61,10 @@ export function mountUI(director, context, doc = document) {
         }
         for (const model of models) { const option = doc.createElement('option'); option.value = model; list.append(option); }
         if (field('pool').open) showEvents(s);
+        field('current-model').hidden = director.connection?.read().mode === 'independent';
+        connectionUI.refresh(); headerUI.refresh();
         presetUI.refresh();
+        workspace?.refresh();
     }
     function showEvents(s) {
         const list = field('events'); list.replaceChildren();
@@ -90,7 +99,11 @@ export function mountUI(director, context, doc = document) {
     };
     root.addEventListener('change', onChange); root.addEventListener('click', onClick);
     field('pool').addEventListener('toggle', refresh);
+    workspace = mountWorkspace(director, context, root, host, doc);
     refresh();
-    return { refresh, dispose() { presetUI.dispose(); root.removeEventListener('change', onChange); root.removeEventListener('click', onClick); root.remove(); } };
+    return { refresh, dispose() { workspace.dispose(); connectionUI.dispose(); headerUI.dispose(); presetUI.dispose(); root.removeEventListener('change', onChange); root.removeEventListener('click', onClick); root.remove(); } };
 }
 import { mountPresetUI } from './preset-ui.js';
+import { mountConnectionUI } from './connection-ui.js';
+import { mountHeaderUI } from './header-ui.js';
+import { mountWorkspace } from './workspace-ui.js';
