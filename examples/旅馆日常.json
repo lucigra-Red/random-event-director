@@ -1,0 +1,13 @@
+{
+  "type": "random-event-director-presets",
+  "version": 1,
+  "presets": [
+    {
+      "id": "example-hotel-daily",
+      "name": "旅馆日常",
+      "generatorPrompt": "根据近期剧情生成 {{count}} 个旅馆日常事件起因。优先环境变化、轻松社交、生活小意外和偶发线索。大多数轻度，少量中度；避免连续冲突或灾难，不决定结果，不替玩家行动。",
+      "injectionTemplate": "请把下面的情境自然融入当前场景，保持轻松的日常氛围：\n{{event}}\n只引入起因，把结果与应对空间留给后续互动。",
+      "completionPresetName": ""
+    }
+  ]
+}
