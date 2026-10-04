@@ -1,0 +1,96 @@
+export function mountUI(director, context, doc = document) {
+    const host = doc.querySelector('#extensions_settings2') || doc.querySelector('#extensions_settings');
+    if (!host) return null;
+    doc.querySelector('#random_event_director_panel')?.remove();
+    const root = doc.createElement('details');
+    root.id = 'random_event_director_panel'; root.className = 'red-panel';
+    root.innerHTML = `<summary>随机事件导演 <small>V0.1.1</small></summary>
+      <div class="red-body">
+      <p class="red-help">副 AI 提出事件，本地掷骰，主 AI 自然演出。设置与事件池按聊天保存。</p>
+      <label><input type="checkbox" data-setting="enabled"> 开启本聊天的随机事件导演</label>
+      <div class="red-grid">
+        <label>随机事件概率（%）<input class="text_pole" type="number" min="0" max="100" data-setting="triggerProbability"></label>
+        <label>事件池目标数量<input class="text_pole" type="number" min="1" max="20" data-setting="targetCount"></label>
+        <label>自动补充阈值<input class="text_pole" type="number" min="0" max="19" data-setting="refillThreshold"></label>
+        <label>过期 Assistant 回合<input class="text_pole" type="number" min="1" max="50" data-setting="expiryTurns"></label>
+        <label>近期消息数量<input class="text_pole" type="number" min="1" max="40" data-setting="contextMessages"></label>
+        <label>副 AI 超时（秒）<input class="text_pole" type="number" min="5" max="180" data-setting="timeoutSeconds"></label>
+      </div>
+      <label><input type="checkbox" data-setting="useCurrentModel"> 使用当前酒馆 API 的当前模型</label>
+      <label>副 AI 模型<input class="text_pole" data-setting="model" list="red-models" placeholder="选择已有模型或填写同一 API 下的模型 ID"></label>
+      <datalist id="red-models"></datalist>
+      <p class="red-help">取消上方勾选可指定同一连接中的其他模型；不会切换主聊天模型或保存 API Key。</p>
+      <div data-role="preset-host"></div>
+      <details><summary>补充世界观（可选）</summary><textarea class="text_pole" rows="4" data-setting="worldNotes" placeholder="副 AI 自动读取角色描述、人格、场景和近期对话。关键世界书设定可在此补充。"></textarea></details>
+      <p data-role="count"></p><p data-role="pending"></p><p data-role="recent"></p>
+      <div class="red-actions"><button class="menu_button" type="button" data-action="roll">立即掷骰</button>
+      <button class="menu_button" type="button" data-action="generate">生成 / 重新生成事件池</button></div>
+      <details data-role="pool"><summary>查看事件池（可能剧透）</summary><div data-role="events"></div></details>
+      <p data-role="status" aria-live="polite"></p>
+      </div>`;
+    host.append(root);
+    const presetUI = mountPresetUI(root.querySelector('[data-role="preset-host"]'), director, context, doc);
+    let notice = '', lastOwner = null;
+    const field = name => root.querySelector(`[data-role="${name}"]`);
+    function refresh() {
+        let s;
+        try { s = director.state(); } catch (e) { field('status').textContent = e.message; return; }
+        if (s?.owner !== lastOwner) { notice = ''; lastOwner = s?.owner; }
+        if (!s?.pendingEvent && notice === '随机事件已准备，将在下一次正常生成时生效。') notice = '';
+        for (const el of root.querySelectorAll('[data-setting]')) {
+            const name = el.dataset.setting;
+            el.disabled = !s || (name === 'model' && s.useCurrentModel);
+            if (el.type === 'checkbox') el.checked = Boolean(s?.[name]);
+            else if (doc.activeElement !== el) el.value = s?.[name] ?? '';
+        }
+        field('count').textContent = s ? `当前可用事件池：${s.eventPool.length} / ${s.targetCount}${director.fill ? ' · 副 AI 生成中…' : ''}` : '请先打开一个聊天。';
+        field('pending').textContent = s?.pendingEvent ? '随机事件已准备，将在对应的下一次正常生成时生效。' : '当前没有待用事件。';
+        field('recent').textContent = `最近触发：${s?.recentEvent?.title || '暂无'}`;
+        field('status').textContent = s?.error || notice;
+        for (const button of root.querySelectorAll('[data-action]')) button.disabled = !s?.enabled || director.busy || Boolean(director.fill);
+        const list = root.querySelector('#red-models'); list.replaceChildren();
+        const models = new Set();
+        for (const select of doc.querySelectorAll('select[id*="model"]')) for (const option of select.options) {
+            if (option.value && !option.disabled) models.add(option.value);
+        }
+        for (const model of models) { const option = doc.createElement('option'); option.value = model; list.append(option); }
+        if (field('pool').open) showEvents(s);
+        presetUI.refresh();
+    }
+    function showEvents(s) {
+        const list = field('events'); list.replaceChildren();
+        for (const event of [...(s?.pendingEvent ? [s.pendingEvent.event] : []), ...(s?.eventPool || [])]) {
+            const item = doc.createElement('article'), title = doc.createElement('strong'), meta = doc.createElement('small'), content = doc.createElement('p');
+            title.textContent = event.title;
+            meta.textContent = `类型：${event.type} · 权重：${event.weight} · ${event.status === 'pending' ? '待用' : '可用'}`;
+            content.textContent = event.content; item.append(title, meta, content); list.append(item);
+        }
+        if (!list.childElementCount) list.textContent = '暂无事件。';
+    }
+    const onChange = event => {
+        const el = event.target, name = el.dataset.setting;
+        if (!name) return;
+        notice = '';
+        try { director.update({ [name]: el.type === 'checkbox' ? el.checked : el.value }); refresh(); }
+        catch (e) { director.fail(e); }
+    };
+    const onClick = async event => {
+        const action = event.target.closest('[data-action]')?.dataset.action;
+        if (!action) return;
+        const owner = director.state()?.owner;
+        try {
+            notice = '';
+            const task = action === 'roll' ? director.rollNow() : director.refill(true);
+            refresh();
+            const done = await task;
+            if (director.state()?.owner !== owner) { refresh(); return; }
+            notice = done ? (action === 'roll' ? '随机事件已准备，将在下一次正常生成时生效。' : '事件池已更新。') : '本次未准备新事件；正常聊天可继续。';
+        } catch (e) { director.fail(e); }
+        refresh();
+    };
+    root.addEventListener('change', onChange); root.addEventListener('click', onClick);
+    field('pool').addEventListener('toggle', refresh);
+    refresh();
+    return { refresh, dispose() { presetUI.dispose(); root.removeEventListener('change', onChange); root.removeEventListener('click', onClick); root.remove(); } };
+}
+import { mountPresetUI } from './preset-ui.js';

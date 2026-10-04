@@ -1,0 +1,7 @@
+{
+  "name": "sillytavern-random-event-director",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test tests/*.test.js", "check": "node --check index.js && node --check engine.js && node --check api.js && node --check ui.js && node --check presets.js && node --check preset-ui.js" }
+}
