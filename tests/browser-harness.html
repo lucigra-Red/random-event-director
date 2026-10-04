@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>随机事件导演 · 浏览器验证</title><link rel="stylesheet" href="../style.css">
+<style>body{background:#20232a;color:#eee;font:16px system-ui;max-width:720px;margin:30px auto;padding:16px}input,textarea,button{font:inherit;color:inherit;background:#333;border:1px solid #777;border-radius:5px;padding:6px}button{cursor:pointer}.text_pole{box-sizing:border-box;width:100%}details{margin:8px 0}pre{white-space:pre-wrap}#trace{color:#94dda6}#native button{margin:5px}</style>
+<h2>随机事件导演 · 本地 UI 验证</h2><p>这是模拟酒馆的测试页，副 AI 使用固定测试数据，不连接真实模型。</p>
+<div id="extensions_settings2"></div>
+<div id="native"><button id="generate">模拟正常生成</button><button id="regen">模拟重生成</button><button id="switch">切换聊天</button><button id="refresh">模拟刷新恢复</button></div>
+<pre id="trace"></pre>
+<details><summary>模拟请求记录</summary><pre id="prompt-trace"></pre></details>
+<script type="module">
+import { Director, KEY } from '../engine.js';
+import { mountUI } from '../ui.js';
+import { PresetLibrary } from '../presets.js';
+let batch = 0, calls = 0, injected = '', lastPrompt = '', id = 0;
+const extensionSettings = {};
+const chats = ['A', 'B'].map(chatId => ({ characterId: 0, characters: [{ avatar: 'hotel.png' }], chatId, extensionSettings,
+    getPresetManager: () => ({ getPresetList: () => ({ preset_names: { '副 AI 参数示例': 0 } }) }),
+    chatMetadata: {}, chat: [{ is_user: true, mes: '我们在旅馆房间休息。' }] }));
+let selected = 0, ctx = chats[0], ui;
+const trace = document.querySelector('#trace');
+const presets = new PresetLibrary({ storage: () => extensionSettings, makeId: () => `preset-${++id}` });
+const d = new Director({ context: () => ctx, presets, request: async (_ctx, prompts, settings) => {
+    calls++; batch++;
+    document.querySelector('#prompt-trace').textContent = `副 AI 提示词：\n${prompts[0].content}\n参数预设：${settings.directorPreset?.completionPresetName || '默认'}`;
+    return JSON.stringify({ events: Array.from({ length: 6 }, (_, i) => ({ title: `旅馆小事 ${batch}-${i + 1}`,
+        content: i === 0 ? `门外响起三声敲门声（批次 ${batch}）。` : `走廊传来轻轻的脚步声 ${batch}-${i}。`, weight: 10 })) });
+}, makeId: () => `test-${++id}`, rng: () => 0,
+inject: text => { injected = text; }, persist: () => {}, changed: () => ui?.refresh() });
+ui = mountUI(d, () => ctx); document.querySelector('#random_event_director_panel').open = true;
+function report(message) { trace.textContent = `${message}\n聊天 ${ctx.chatId} · 副 AI 调用 ${calls} 次 · 聊天消息 ${ctx.chat.length} 条`; }
+document.querySelector('#generate').onclick = () => {
+    ctx.chat.push({ is_user: true, mes: '我继续等待。' }); d.start('normal'); d.intercept('normal'); lastPrompt = injected;
+    document.querySelector('#prompt-trace').textContent += `\n本轮隐藏注入：\n${injected}`;
+    ctx.chat.push({ is_user: false, mes: injected ? '门外忽然响起三声敲门声。' : '房间里很安静。', gen_finished: 'done' });
+    d.receive(ctx.chat.length - 1, 'normal'); d.end(); ui.refresh(); report(`正常生成成功 · ${lastPrompt ? '收到隐藏事件' : '无事件'}`);
+};
+document.querySelector('#regen').onclick = () => {
+    d.start('regenerate'); if (!ctx.chat.at(-1)?.is_user) ctx.chat.pop(); d.invalidate('delete', ctx.chat.length); d.intercept('regenerate');
+    const same = lastPrompt === injected;
+    ctx.chat.push({ is_user: false, mes: '重生成的正文。', gen_finished: 'done' }); d.receive(ctx.chat.length - 1, 'regenerate'); d.end(); ui.refresh(); report(`重生成 · 隐藏条件保持：${same}`);
+};
+document.querySelector('#switch').onclick = () => { selected = 1 - selected; ctx = chats[selected]; d.switchChat(); ui.refresh(); report('已切换聊天'); };
+document.querySelector('#refresh').onclick = () => {
+    const pendingId = d.state().pendingEvent?.event.id;
+    ctx.chatMetadata = JSON.parse(JSON.stringify(ctx.chatMetadata)); ctx.chat = JSON.parse(JSON.stringify(ctx.chat));
+    d.switchChat(); ui.refresh(); report(`状态恢复 · pending 保持：${pendingId === d.state().pendingEvent?.event.id}`);
+};
+report('测试界面已加载');
+</script></html>
