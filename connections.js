@@ -1,6 +1,8 @@
 export const CONNECTION_KEY = 'random_event_director_connection_v1';
 export function connectionConfig(raw = {}) {
-    return { mode: raw.mode === 'current' ? 'current' : 'independent',
+    const hasOwnConfig = ['endpoint', 'apiKey', 'model'].some(key => String(raw[key] || '').trim());
+    const mode = raw.mode === 'current' || raw.mode === 'independent' ? raw.mode : (hasOwnConfig ? 'independent' : 'current');
+    return { mode,
         endpoint: String(raw.endpoint || '').trim().slice(0, 2000),
         apiKey: String(raw.apiKey || '').trim().slice(0, 4000),
         model: String(raw.model || '').trim().slice(0, 200) };

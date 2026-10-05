@@ -15,7 +15,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
       </div><div class="red-settings-view" data-page="settings" hidden><p class="red-settings-intro">配置初月使用的副 AI、预设与随机事件。API 连接和预设库可共用，当前聊天的选择独立保存。</p></div>`;
     doc.body.append(window);
     const entry = doc.createElement('div'); entry.id = 'red_director_entry'; entry.className = 'inline-drawer red-extension-entry';
-    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.3</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button></div></div>`;
+    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.4</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button></div></div>`;
     settingsHost.append(entry); window.querySelector('[data-page="settings"]').append(settings); settings.open = true;
     const get = name => window.querySelector(`[data-window-role="${name}"]`);
     const button = name => window.querySelector(`[data-window="${name}"]`);

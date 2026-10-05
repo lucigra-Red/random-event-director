@@ -4,7 +4,7 @@ export function mountUI(director, context, doc = document) {
     doc.querySelector('#random_event_director_panel')?.remove();
     const root = doc.createElement('details');
     root.id = 'random_event_director_panel'; root.className = 'red-panel';
-    root.innerHTML = `<summary>随机事件导演 <small>V0.1.3</small></summary>
+    root.innerHTML = `<summary>随机事件导演 <small>V0.1.4</small></summary>
       <div class="red-body">
       <p class="red-help">为当前聊天加入偶发情境。先配置副 AI，再开启随机事件。</p>
       <label><input type="checkbox" data-setting="enabled"> 开启本聊天的随机事件导演</label>
@@ -19,7 +19,8 @@ export function mountUI(director, context, doc = document) {
         <label>副 AI 超时（秒）<input class="text_pole" type="number" min="5" max="180" data-setting="timeoutSeconds"></label>
       </div></details>
       <div data-role="connection-host"></div>
-      <div data-role="current-model" class="red-body"><label><input type="checkbox" data-setting="useCurrentModel"> 使用当前酒馆 API 的当前模型</label>
+      <div data-role="current-model" class="red-body"><label><input type="checkbox" data-setting="useCurrentModel"> 沿用主 API 的当前模型</label>
+      <p class="red-help">已使用主 API 的连接；取消勾选仅用于在同一 API 下指定其他模型。</p>
       <label class="red-column">副 AI 模型<input class="text_pole" data-setting="model" list="red-models" placeholder="选择已有模型或填写同一 API 下的模型 ID"></label>
       <datalist id="red-models"></datalist>
       <p class="red-help">取消上方勾选可指定当前连接中的其他模型。</p></div>
