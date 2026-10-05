@@ -1,3 +1,5 @@
+import { mountDiagnosticsUI } from './diagnostics-ui.js';
+
 export function mountWorkspace(director, context, settings, settingsHost, doc = document) {
     doc.querySelector('#red_director_window')?.remove(); doc.querySelector('#red_director_entry')?.remove();
     const window = doc.createElement('section');
@@ -5,26 +7,28 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     window.setAttribute('role', 'dialog'); window.setAttribute('aria-label', '导演系统-初月');
     window.innerHTML = `<header class="red-window-head"><div class="red-window-title"><span class="red-moon" aria-hidden="true">☾</span><strong>导演系统-初月</strong></div>
       <div class="red-window-tools"><button type="button" data-window="maximize" aria-label="放大窗口" title="放大 / 还原">⛶</button><button type="button" data-window="close" aria-label="关闭导演窗口" title="关闭">×</button></div></header>
-      <nav class="red-tabs" aria-label="导演系统页面"><button type="button" data-view="chat" aria-pressed="true">剧情讨论</button><button type="button" data-view="settings" aria-pressed="false">设置</button><span data-window-role="owner"></span></nav>
+      <nav class="red-tabs" aria-label="导演系统页面"><button type="button" data-view="chat" aria-pressed="true">剧情讨论</button><button type="button" data-view="settings" aria-pressed="false">设置</button><button type="button" data-view="logs" aria-pressed="false">诊断日志</button><span data-window-role="owner"></span></nav>
       <div class="red-chat-view" data-page="chat"><div class="red-guide-status" data-window-role="guide-status"></div>
         <div class="red-transcript" data-window-role="messages" role="log" aria-label="导演讨论记录" aria-live="polite"></div>
         <div class="red-proposal" data-window-role="proposal" hidden><strong>本次方向总结</strong><p data-window-role="summary"></p><div class="red-window-actions"><button type="button" data-window="accept">应用到下一次事件</button><button type="button" data-window="reject">不应用</button></div><small>也可以直接继续讨论，上一份未确认总结会自动作废。</small></div>
         <p class="red-window-notice" data-window-role="notice" role="status"></p>
         <div class="red-composer"><textarea rows="3" maxlength="4000" aria-label="导演讨论输入" placeholder="说说你想要的方向，也可以让初月提建议…\nEnter 发送，Shift+Enter 换行"></textarea><button type="button" data-window="send" aria-label="发送导演讨论">发送</button><button type="button" data-window="stop" hidden>停止</button></div>
         <footer class="red-chat-footer"><button type="button" data-window="clear">清空讨论记录</button><small>仅当前聊天 · 确认后只影响一次事件</small></footer>
-      </div><div class="red-settings-view" data-page="settings" hidden><p class="red-settings-intro">配置初月使用的副 AI、预设与随机事件。API 连接和预设库可共用，当前聊天的选择独立保存。</p></div>`;
+      </div><div class="red-settings-view" data-page="settings" hidden><p class="red-settings-intro">配置初月使用的副 AI、预设与随机事件。API 连接和预设库可共用，当前聊天的选择独立保存。</p></div><div class="red-diagnostics-view" data-page="logs" hidden></div>`;
     doc.body.append(window);
     const entry = doc.createElement('div'); entry.id = 'red_director_entry'; entry.className = 'inline-drawer red-extension-entry';
-    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.5</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button></div></div>`;
+    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.6</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
     settingsHost.append(entry); window.querySelector('[data-page="settings"]').append(settings); settings.open = true;
     const get = name => window.querySelector(`[data-window-role="${name}"]`);
     const button = name => window.querySelector(`[data-window="${name}"]`);
     const input = window.querySelector('textarea[aria-label="导演讨论输入"]');
+    const diagnosticsUI = mountDiagnosticsUI(window.querySelector('[data-page="logs"]'), director.diagnostics, doc);
     let page = 'chat', owner = null, notice = '', transcriptKey = '', lastFocus = null, drag = null;
     function view(name) {
         page = name;
         for (const panel of window.querySelectorAll('[data-page]')) panel.hidden = panel.dataset.page !== page;
         for (const tab of window.querySelectorAll('[data-view]')) tab.setAttribute('aria-pressed', String(tab.dataset.view === page));
+        if (page === 'logs') diagnosticsUI.refresh();
     }
     function open(name = 'chat') { lastFocus = doc.activeElement; window.hidden = false; view(name); refresh(); if (name === 'chat') input.focus(); }
     function refresh() {
@@ -64,6 +68,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         button('send').disabled = !state || running; button('send').hidden = running; button('stop').hidden = !running;
         button('clear').disabled = !state || running; input.disabled = !state;
         get('notice').textContent = notice || disc?.error || '';
+        if (page === 'logs') diagnosticsUI.refresh();
     }
     async function send(text = input.value) {
         if (!String(text).trim() || director.discussion?.chatTask) return;
@@ -120,6 +125,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     observer?.observe(doc.body, { childList: true, subtree: true });
     refresh();
     return { refresh, open, dispose() {
+        diagnosticsUI.dispose();
         observer?.disconnect(); menuButton.removeEventListener('click', fromMenu); menuButton.remove(); entry.removeEventListener('click', launch); entry.remove();
         window.removeEventListener('click', click); input.removeEventListener('keydown', keydown);
         head.removeEventListener('pointerdown', dragStart); head.removeEventListener('pointermove', dragMove); head.removeEventListener('pointerup', dragEnd); head.removeEventListener('pointercancel', dragEnd); window.remove();

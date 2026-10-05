@@ -104,12 +104,14 @@ export class Discussion {
         const id = disc.guide.id, task = { controller: new AbortController(), owner: s.owner, revision: this.revision, id };
         this.guideTask = task; disc.error = ''; d.changed();
         const settings = structuredClone(s), messages = poolPrompt(ctx, settings, 3);
+        d.trace('方向事件生成', 'info', '使用已确认总结生成本次事件候选。', { needed: 3, contextMessages: s.contextMessages }, s.owner, '');
         messages.push({ role: 'user', content: `用户已确认的本次事件方向：${disc.guide.summary}\n仅为这一次事件生成 3 个不同候选起因。保留玩家自主权，仍遵守上面的 events JSON 格式。` });
         try {
             const response = await this.timed(task, ctx, messages, settings);
             if (!this.current(ctx, task.owner, task.revision) || this.guideTask !== task || task.controller.signal.aborted || disc.guide?.id !== id) return false;
-            disc.guide.pool = parseEvents(response, 3, d.makeId); d.save(ctx, s); return true;
+            disc.guide.pool = parseEvents(response, 3, d.makeId); d.trace('方向事件就绪', 'success', '方向候选已准备，只等待一次事件触发。', { count: disc.guide.pool.length }, s.owner, ''); d.save(ctx, s); return true;
         } catch (e) {
+            d.trace('方向事件生成', 'error', '方向候选未生成成功；请检查副 AI 请求或输出格式。', {}, s.owner, '');
             if (this.current(ctx, task.owner, task.revision) && this.guideTask === task && disc.guide?.id === id) {
                 disc.error = String(e.message || e).slice(0, 300); d.save(ctx, s);
             }

@@ -76,6 +76,19 @@
 #red_director_window .red-chat-footer small { opacity: .5; font-size: .73em; }
 #red_director_window .red-settings-view { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
 #red_director_window .red-settings-intro { font-size: .85em; opacity: .7; margin: 0 0 12px; }
+#red_director_window .red-diagnostics-view { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 14px; gap: 10px; overflow: auto; }
+#red_director_window .red-log-controls { display: flex; flex-wrap: wrap; gap: 10px; font-size: .83em; }
+#red_director_window .red-log-controls label { display: flex; gap: 5px; align-items: center; }
+#red_director_window .red-log-status { margin: 0; font-size: .8em; opacity: .75; }
+#red_director_window .red-log-list { flex: 1; min-height: 160px; overflow: auto; border: 1px solid var(--SmartThemeBorderColor, #414857); border-radius: 8px; padding: 0 10px; }
+#red_director_window .red-log-row { padding: 10px 0; border-bottom: 1px solid var(--SmartThemeBorderColor, #414857); }
+#red_director_window .red-log-row small { display: block; opacity: .65; font-size: .75em; }
+#red_director_window .red-log-row strong { display: block; font-size: .9em; }
+#red_director_window .red-log-row p { margin: 4px 0; font-size: .85em; overflow-wrap: anywhere; }
+#red_director_window .red-log-row code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .73em; opacity: .7; }
+#red_director_window .red-log-success strong { color: #99cdaa; }
+#red_director_window .red-log-warn strong { color: #e5c184; }
+#red_director_window .red-log-error strong { color: #efa0a0; }
 #red_director_window #random_event_director_panel { padding: 0; border: 0; margin: 0; }
 #red_director_window #random_event_director_panel > summary { display: none; }
 #red_director_window #random_event_director_panel > .red-body { padding-top: 0; }

@@ -4,7 +4,7 @@ export function mountUI(director, context, doc = document) {
     doc.querySelector('#random_event_director_panel')?.remove();
     const root = doc.createElement('details');
     root.id = 'random_event_director_panel'; root.className = 'red-panel';
-    root.innerHTML = `<summary>随机事件导演 <small>V0.1.5</small></summary>
+    root.innerHTML = `<summary>随机事件导演 <small>V0.1.6</small></summary>
       <div class="red-body">
       <p class="red-help">为当前聊天加入偶发情境。先配置副 AI，再开启随机事件。</p>
       <label><input type="checkbox" data-setting="enabled"> 开启本聊天的随机事件导演</label>
