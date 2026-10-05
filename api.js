@@ -1,6 +1,42 @@
 import { apiBase, connectionConfig } from './connections.js';
 import { normalizeGeneration } from './headers.js';
 
+export async function requestModels(ctx, connection, signal, fetchImpl = globalThis.fetch) {
+    const own = connectionConfig(connection);
+    if (own.mode !== 'independent') throw new Error('请先选择独立副 AI 连接');
+    const endpoint = apiBase(own.endpoint);
+    if (/\r|\n/.test(own.apiKey)) throw new Error('API 密钥不能包含换行');
+    if (!ctx.getRequestHeaders) throw new Error('此酒馆版本缺少请求服务，请更新 SillyTavern');
+    const controller = new AbortController(), abort = () => controller.abort();
+    signal?.throwIfAborted();
+    signal?.addEventListener('abort', abort, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
+    try {
+        const response = await fetchImpl('/api/backends/chat-completions/status', {
+            method: 'POST', headers: ctx.getRequestHeaders(), signal: controller.signal,
+            body: JSON.stringify({ chat_completion_source: 'custom', custom_url: endpoint,
+                custom_include_headers: JSON.stringify({ Authorization: own.apiKey ? `Bearer ${own.apiKey}` : '' }) }),
+        });
+        controller.signal.throwIfAborted();
+        if (!response.ok) throw new Error();
+        const data = await response.json();
+        controller.signal.throwIfAborted();
+        if (data?.error || !Array.isArray(data?.data)) throw new Error();
+        const models = [...new Set(data.data.map(model => model?.id).filter(id =>
+            typeof id === 'string' && id.trim() === id && id.length > 0 && id.length <= 200 && !/[\x00-\x1f\x7f]/.test(id)))].sort();
+        if (!models.length) throw new Error('empty');
+        return models;
+    } catch (e) {
+        signal?.throwIfAborted();
+        if (timedOut) throw new Error('拉取模型超时，请稍后重试；也可以手动填写模型 ID。');
+        if (e.message === 'empty') throw new Error('接口未返回可用模型，请手动填写模型 ID。');
+        throw new Error('拉取模型失败，请检查副 API 地址和密钥；接口需支持模型列表，也可以手动填写模型 ID。');
+    } finally {
+        clearTimeout(timer); signal?.removeEventListener('abort', abort);
+    }
+}
+
 export async function requestPool(ctx, messages, settings, signal, connection = { mode: 'current' }) {
     const own = connectionConfig(connection);
     const sampling = normalizeGeneration(settings.headerPreset?.generation);
