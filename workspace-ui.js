@@ -1,47 +1,105 @@
 import { mountDiagnosticsUI } from './diagnostics-ui.js';
+import { makeDraggable, placeWidget, visibleViewport } from './window-placement.js';
+
+const WORKSPACE_KEY = 'random_event_director_workspace_ui_v1';
+const WINDOW_SIZES = new Set(['small', 'medium', 'large']);
+// A faceted D10 silhouette, not a six-sided pip die. Decorative faces do not represent an event probability roll.
+const D10 = `<svg class="red-d10" viewBox="0 0 100 108" aria-hidden="true" focusable="false"><path class="red-die-shadow" d="M50 7 89 38 79 76 50 100 21 76 11 38Z"/><path class="red-die-face red-die-face-top" d="M50 7 11 38 50 29 89 38Z"/><path class="red-die-face red-die-face-left" d="M11 38 21 76 37 63 50 29Z"/><path class="red-die-face red-die-face-center" d="M50 29 37 63 50 89 63 63Z"/><path class="red-die-face red-die-face-right" d="M89 38 79 76 63 63 50 29Z"/><path class="red-die-face red-die-face-bottom" d="M21 76 50 100 79 76 63 63 50 89 37 63Z"/><path class="red-die-edges" d="M50 7 89 38 79 76 50 100 21 76 11 38Z M11 38 50 29 89 38 M50 7V29 M50 29 37 63 21 76 M50 29 63 63 79 76 M37 63 50 89 63 63 M50 89V100"/><text class="red-die-number" x="50" y="64" text-anchor="middle">10</text><path class="red-die-glint" d="M46 17h8 M50 13v8"/></svg>`;
 
 export function mountWorkspace(director, context, settings, settingsHost, doc = document) {
     doc.querySelector('#red_director_window')?.remove(); doc.querySelector('#red_director_entry')?.remove();
+    doc.querySelector('#red_director_dice_dock')?.remove();
+    doc.querySelector('#red_director_event_window')?.remove();
     const window = doc.createElement('section');
     window.id = 'red_director_window'; window.className = 'red-window'; window.hidden = true;
     window.setAttribute('role', 'dialog'); window.setAttribute('aria-label', '导演系统-初月');
     window.innerHTML = `<header class="red-window-head"><div class="red-window-title"><span class="red-moon" aria-hidden="true">☾</span><div><strong>导演系统-初月</strong><small>先聊想法，再决定下一幕</small></div></div>
-      <div class="red-window-tools"><button type="button" data-window="maximize" aria-label="放大窗口" title="放大 / 还原">⛶</button><button type="button" data-window="close" aria-label="关闭导演窗口" title="关闭">×</button></div></header>
-      <nav class="red-tabs" aria-label="导演系统页面"><button type="button" data-view="chat" aria-pressed="true">剧情讨论</button><button type="button" data-view="events" aria-pressed="false">随机事件</button><button type="button" data-view="settings" aria-pressed="false">设置</button><button type="button" data-view="logs" aria-pressed="false">诊断日志</button></nav><div class="red-owner" data-window-role="owner"></div>
+      <div class="red-window-tools"><div class="red-size-switch" role="group" aria-label="窗口大小"><button type="button" data-size="large" aria-label="大窗口" aria-pressed="false">大</button><button type="button" data-size="medium" aria-label="中窗口" aria-pressed="true">中</button><button type="button" data-size="small" aria-label="小窗口" aria-pressed="false">小</button></div><button type="button" data-window="maximize" aria-label="放大窗口" title="放大 / 还原">⛶</button><button type="button" data-window="close" aria-label="关闭导演窗口" title="关闭">×</button></div></header>
+      <nav class="red-tabs" aria-label="导演系统页面"><button type="button" data-view="chat" aria-pressed="true">剧情讨论</button><button type="button" data-view="events" aria-pressed="false">随机事件</button><button type="button" data-view="pool" aria-pressed="false">事件池</button><button type="button" data-view="settings" aria-pressed="false">设置</button><button type="button" data-view="logs" aria-pressed="false">诊断日志</button></nav><div class="red-owner" data-window-role="owner"></div>
       <div class="red-chat-view" data-page="chat"><div class="red-guide-status" data-window-role="guide-status"></div>
         <div class="red-transcript" data-window-role="messages" role="log" aria-label="导演讨论记录" aria-live="polite"></div>
         <div class="red-proposal" data-window-role="proposal" hidden><div class="red-summary-card"><strong><span aria-hidden="true">✧</span> 本次方向总结</strong><p data-window-role="summary"></p></div><div class="red-window-actions"><button type="button" data-window="accept">应用到下一次事件</button><button type="button" data-window="reject">不应用</button></div><small>也可以直接继续讨论，上一份未确认总结会自动作废。</small></div>
         <p class="red-window-notice" data-window-role="notice" role="status"></p>
-        <div class="red-composer"><textarea rows="3" maxlength="4000" aria-label="导演讨论输入" placeholder="说说你想要的方向，也可以让初月提建议…\nEnter 发送，Shift+Enter 换行"></textarea><button type="button" data-window="send" aria-label="发送导演讨论">发送</button><button type="button" data-window="stop" hidden>停止</button></div>
+        <div class="red-composer"><textarea rows="2" maxlength="4000" aria-label="导演讨论输入" placeholder="说说你想要的方向…\nEnter 发送，Shift+Enter 换行"></textarea><button type="button" data-window="send" aria-label="发送导演讨论">发送</button><button type="button" data-window="stop" hidden>停止</button></div>
         <footer class="red-chat-footer"><button type="button" data-window="clear">清空讨论记录</button><small>仅当前聊天 · 确认后只影响一次事件</small></footer>
       </div><div class="red-events-view" data-page="events" hidden>
         <div class="red-page-heading"><span class="red-eyebrow">故事的下一幕</span><h2>随机事件</h2><p>一点意外，让故事自然往前走。</p></div>
         <label class="red-event-toggle"><input type="checkbox" data-window-role="enable-events">开启本聊天的随机事件</label>
         <div class="red-event-stats"><div><small>可用事件</small><strong data-window-role="event-count"></strong></div><div><small>触发概率</small><strong data-window-role="event-probability"></strong></div></div>
+        <div class="red-event-actions"><button type="button" class="red-dice-button" data-window="roll" aria-label="投掷十面骰，启用一个事件">${D10}<span data-window-role="dice-label">投掷并启用事件</span></button><button type="button" data-window="prepare-pool">准备 / 更新事件池</button></div>
+        <button type="button" class="red-pool-link" data-view="pool">完整事件池 →</button>
         <article class="red-event-card"><div class="red-event-card-label"><span aria-hidden="true">☾</span><span data-window-role="event-label"></span></div><h3 data-window-role="event-title"></h3><p data-window-role="event-hint"></p><details data-window-role="event-reveal" hidden><summary>查看事件内容（可能剧透）</summary><p data-window-role="event-content"></p></details></article>
-        <div class="red-event-actions"><button type="button" data-window="roll">⚄ 立即掷骰</button><button type="button" data-window="prepare-pool">准备 / 更新事件池</button></div>
-        <p class="red-event-notice" data-window-role="event-notice" role="status"></p><small class="red-event-footnote">手动掷骰后，在下一次正常生成时注入事件。仅当前聊天生效。</small>
+        <p class="red-event-notice" data-window-role="event-notice" role="status"></p><small class="red-event-footnote">点击骰子自动开启当前聊天并抽取一个事件；继续主聊天时生效，不会自动发送消息。</small>
         <div class="red-event-recent"><small>最近触发</small><span data-window-role="event-recent"></span></div><button type="button" class="red-text-button" data-view="settings">调整概率、上下文与预设 →</button>
-      </div><div class="red-settings-view" data-page="settings" hidden><div class="red-page-heading"><span class="red-eyebrow">让初月更懂你的故事</span><h2>导演设置</h2></div><p class="red-settings-intro">配置副 AI、预设与随机事件。API 连接和预设库可共用，当前聊天的选择独立保存。</p></div><div class="red-diagnostics-view" data-page="logs" hidden></div>`;
-    doc.body.append(window);
+      </div><div class="red-pool-view" data-page="pool" hidden><div class="red-page-heading"><span class="red-eyebrow">当前聊天 · 可能剧透</span><h2>完整事件池</h2><p data-window-role="pool-count"></p></div><div data-window-role="pool-list"></div><button type="button" data-view="events">返回随机事件</button></div><div class="red-settings-view" data-page="settings" hidden><div class="red-page-heading"><span class="red-eyebrow">让初月更懂你的故事</span><h2>导演设置</h2></div><p class="red-settings-intro">配置副 AI、预设与随机事件。API 连接和预设库可共用，当前聊天的选择独立保存。</p></div><div class="red-diagnostics-view" data-page="logs" hidden></div>`;
+    const diceDock = doc.createElement('div'); diceDock.id = 'red_director_dice_dock';
+    diceDock.innerHTML = `<button type="button" class="red-floating-die" aria-label="投掷十面骰，启用一个事件">${D10}</button><span class="red-dice-feedback" role="status" aria-live="polite"></span>`;
+    const eventWindow = doc.createElement('section'); eventWindow.id = 'red_director_event_window'; eventWindow.hidden = true;
+    eventWindow.setAttribute('role', 'dialog'); eventWindow.setAttribute('aria-label', '本轮随机事件');
+    eventWindow.innerHTML = `<header class="red-mini-head"><span>☾ <span data-mini="label">本轮随机事件</span></span><button type="button" data-mini-action="close" aria-label="关闭事件小窗">×</button></header><div class="red-mini-body"><h3 data-mini="title"></h3><p data-mini="hint"></p><details data-mini="reveal" hidden><summary>查看事件内容（可能剧透）</summary><p data-mini="content"></p></details><p data-mini="notice" role="status" aria-live="polite"></p></div><footer><button type="button" data-mini-action="pool">完整事件池</button><button type="button" data-mini-action="director">打开导演系统</button></footer>`;
+    doc.body.append(window, diceDock, eventWindow);
+    const floatingDie = diceDock.querySelector('button'), diceFeedback = diceDock.querySelector('.red-dice-feedback');
     const entry = doc.createElement('div'); entry.id = 'red_director_entry'; entry.className = 'inline-drawer red-extension-entry';
-    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.7</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="events">随机事件</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
+    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.8</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="events">随机事件</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
     settingsHost.append(entry); window.querySelector('[data-page="settings"]').append(settings); settings.open = true;
     const get = name => window.querySelector(`[data-window-role="${name}"]`);
     const button = name => window.querySelector(`[data-window="${name}"]`);
     const input = window.querySelector('textarea[aria-label="导演讨论输入"]');
     const diagnosticsUI = mountDiagnosticsUI(window.querySelector('[data-page="logs"]'), director.diagnostics, doc);
-    let page = 'chat', owner = null, notice = '', eventNotice = '', pendingId = null, transcriptKey = '', lastFocus = null, drag = null;
+    let page = 'chat', owner = null, notice = '', eventNotice = '', pendingId = null, transcriptKey = '', poolKey = '', lastFocus = null;
+    let disposed = false, eventTask = null, diceAnimating = false, diceTimer = null, animationUntil = 0;
+    const mini = name => eventWindow.querySelector(`[data-mini="${name}"]`);
+    function reflow() { for (const widget of [window, diceDock, eventWindow]) placeWidget(widget); }
+    function setSize(size, persist = false) {
+        if (!WINDOW_SIZES.has(size)) return;
+        window.dataset.size = size; window.classList.remove('red-maximized');
+        for (const property of ['width', 'height', 'left', 'top', 'right', 'bottom']) window.style.removeProperty(property);
+        for (const item of window.querySelectorAll('[data-size]')) item.setAttribute('aria-pressed', String(item.dataset.size === size));
+        button('maximize').setAttribute('aria-label', '放大窗口');
+        if (!window.hidden) placeWidget(window);
+        if (persist) {
+            const ctx = context();
+            if (ctx.extensionSettings) { ctx.extensionSettings[WORKSPACE_KEY] = { size }; ctx.saveSettingsDebounced?.(); }
+        }
+    }
+    setSize(context().extensionSettings?.[WORKSPACE_KEY]?.size || 'medium');
     function view(name) {
         page = name;
         for (const panel of window.querySelectorAll('[data-page]')) panel.hidden = panel.dataset.page !== page;
         for (const tab of window.querySelectorAll('.red-tabs [data-view]')) tab.setAttribute('aria-pressed', String(tab.dataset.view === page));
         if (page === 'logs') diagnosticsUI.refresh();
     }
-    function open(name = 'chat') { lastFocus = doc.activeElement; window.hidden = false; view(name); refresh(); if (name === 'chat') input.focus(); }
+    function open(name = 'chat') {
+        lastFocus = doc.activeElement; window.hidden = false; view(name); refresh(); placeWidget(window);
+        if (name === 'chat' && !doc.defaultView.matchMedia('(pointer: coarse)').matches) input.focus();
+    }
+    function showEvent() {
+        const wasHidden = eventWindow.hidden; eventWindow.hidden = false; refresh();
+        const rect = diceDock.getBoundingClientRect(), width = eventWindow.getBoundingClientRect().width, viewport = visibleViewport(doc.defaultView);
+        const beside = rect.left - width - 8 >= viewport.left + 8;
+        placeWidget(eventWindow, wasHidden ? { left: beside ? rect.left - width - 8 : viewport.left + 8,
+            top: beside ? rect.top : viewport.top + 8 } : undefined);
+    }
+    function renderPool(state) {
+        const pending = state?.pendingEvent?.event;
+        const candidates = state?.eventPool || [], guided = (state?.discussion?.guide?.pool || []).filter(item => item.id !== pending?.id);
+        get('pool-count').textContent = `已抽取 ${pending ? 1 : 0} · 普通候选 ${candidates.length} · 本次方向候选 ${guided.length}`;
+        const key = JSON.stringify([state?.owner, pending, candidates, guided]);
+        if (key === poolKey) return;
+        poolKey = key; const list = get('pool-list'); list.replaceChildren();
+        for (const [label, events] of [['已抽取 · 仅本轮生效', pending ? [pending] : []], ['普通事件池', candidates], ['本次讨论方向 · 仅生效一次', guided]]) {
+            if (!events.length) continue;
+            const heading = doc.createElement('h3'); heading.textContent = label; list.append(heading);
+            for (const event of events) {
+                const detail = doc.createElement('details'), title = doc.createElement('summary'), content = doc.createElement('p');
+                title.textContent = event.title; content.textContent = event.content; detail.append(title, content); list.append(detail);
+            }
+        }
+        if (!list.childNodes.length) { const empty = doc.createElement('p'); empty.textContent = state ? '事件池还没有内容。到随机事件页准备事件，或直接点击骰子。' : '请先打开一个聊天。'; list.append(empty); }
+    }
     function refresh() {
         const state = director.state(), disc = state?.discussion, currentOwner = state?.owner || null;
-        if (owner !== currentOwner) { owner = currentOwner; input.value = ''; notice = ''; eventNotice = ''; transcriptKey = ''; pendingId = null; get('event-reveal').open = false; }
+        if (owner !== currentOwner) { owner = currentOwner; input.value = ''; notice = ''; eventNotice = ''; transcriptKey = ''; pendingId = null; get('event-reveal').open = false; eventWindow.hidden = true; mini('reveal').open = false; }
         const ctx = context(); get('owner').textContent = state ? `${ctx.name2 || '当前角色'} · 当前聊天` : '未打开聊天';
         const key = JSON.stringify([disc?.messages, Boolean(director.discussion?.chatTask)]);
         if (key !== transcriptKey) {
@@ -78,31 +136,56 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         button('clear').disabled = !state || running; input.disabled = !state;
         get('notice').textContent = notice || disc?.error || '';
         const pending = state?.pendingEvent?.event;
-        if (pendingId !== (pending?.id || null)) { pendingId = pending?.id || null; get('event-reveal').open = false; eventNotice = ''; }
+        if (pendingId !== (pending?.id || null)) { pendingId = pending?.id || null; get('event-reveal').open = false; mini('reveal').open = false; eventNotice = ''; }
         get('enable-events').checked = Boolean(state?.enabled); get('enable-events').disabled = !state;
         get('event-count').textContent = state ? `${state.eventPool.length} / ${state.targetCount}` : '—';
         get('event-probability').textContent = state ? `${state.triggerProbability}%` : '—';
-        get('event-label').textContent = pending ? '已抽取 · 等待本轮生成' : (director.fill ? '初月正在准备事件' : '下一次意外，尚未揭晓');
+        const actionRunning = Boolean(eventTask), rolling = diceAnimating || (eventTask?.owner === currentOwner && eventTask?.action === 'roll');
+        const preparing = Boolean(director.fill || director.discussion?.guideTask);
+        get('event-label').textContent = pending ? '已抽取 · 等待本轮生成' : (preparing || actionRunning ? '初月正在准备事件' : '下一次意外，尚未揭晓');
         get('event-title').textContent = pending?.title || (state ? '让故事多一点可能' : '请先打开一个聊天');
         get('event-hint').textContent = pending ? '事件已准备，将在对应的正常生成中生效；成功回复后结束本次注入。' : '保持自然的随机触发，或亲手掷骰，迎接一个小变化。';
         get('event-reveal').hidden = !pending; get('event-content').textContent = pending?.content || '';
         get('event-recent').textContent = state?.recentEvent?.title || '暂无';
-        get('event-notice').textContent = state?.error || eventNotice || (!state?.enabled && state ? '开启上方开关后，即可准备事件。' : '');
-        button('roll').disabled = !state?.enabled || director.busy || Boolean(director.fill) || Boolean(pending);
-        button('prepare-pool').disabled = !state?.enabled || director.busy || Boolean(director.fill);
+        get('event-notice').textContent = state?.error || eventNotice || (!state?.enabled && state ? '点击骰子即可开启本聊天并准备一个事件。' : '');
+        // The die always remains draggable and can reopen the current event, even while a request is busy.
+        button('roll').disabled = false; floatingDie.disabled = false;
+        button('prepare-pool').disabled = !state?.enabled || director.busy || preparing || actionRunning;
+        get('dice-label').textContent = pending ? '本轮事件已启用' : (actionRunning || preparing ? '正在准备…' : '投掷并启用事件');
+        button('roll').classList.toggle('red-is-rolling', rolling); floatingDie.classList.toggle('red-is-rolling', rolling);
+        floatingDie.classList.toggle('red-die-ready', Boolean(pending));
+        const diceTitle = !state ? '请先打开一个聊天' : (pending ? '本轮事件已启用，继续主聊天即可' : (director.busy ? '主 AI 正在生成，请稍候' : (preparing || actionRunning ? '正在准备事件，请稍候' : '投掷十面骰，开启当前聊天并抽取一个事件')));
+        floatingDie.title = diceTitle; button('roll').title = diceTitle;
+        floatingDie.setAttribute('aria-busy', String(actionRunning || preparing)); button('roll').setAttribute('aria-busy', String(actionRunning || preparing));
+        diceDock.hidden = false;
+        diceFeedback.textContent = pending ? '本轮已启用' : (eventTask?.owner === currentOwner ? '准备中…' : eventNotice);
+        mini('label').textContent = get('event-label').textContent;
+        mini('title').textContent = pending?.title || (preparing || actionRunning ? '正在准备事件…' : (state ? '本轮暂无事件' : '请先打开一个聊天'));
+        mini('hint').textContent = pending ? get('event-hint').textContent : (director.busy ? '主 AI 正在生成，请稍后再投掷。' : (preparing || actionRunning ? '准备完成后会在这里显示抽取结果。' : '点击骰子抽取事件，继续主聊天时生效。'));
+        mini('reveal').hidden = !pending; mini('content').textContent = pending?.content || '';
+        mini('notice').textContent = state?.error || eventNotice || '';
+        renderPool(state); reflow();
         if (page === 'logs') diagnosticsUI.refresh();
     }
     async function eventAction(action) {
-        const currentOwner = director.state()?.owner;
+        if (action === 'roll') showEvent();
+        const state = director.state(), currentOwner = state?.owner;
+        if (!state || eventTask || director.busy || director.fill || director.discussion?.guideTask || (action === 'roll' && state.pendingEvent)) return;
+        const token = { action, owner: currentOwner }; eventTask = token;
+        if (action === 'roll') {
+            diceAnimating = true; animationUntil = Date.now() + 650;
+            if (diceTimer) doc.defaultView.clearTimeout(diceTimer);
+            diceTimer = doc.defaultView.setTimeout(() => { diceTimer = null; diceAnimating = false; if (!disposed) refresh(); }, 650);
+        }
         try {
-            eventNotice = '';
-            const task = action === 'roll' ? director.rollNow() : director.refill(true); refresh();
+            eventNotice = action === 'roll' ? '正在投掷并准备事件…' : '正在更新事件池…';
+            const task = action === 'roll' ? director.rollNow({ enable: true }) : director.refill(true); refresh();
             const done = await task;
-            if (director.state()?.owner !== currentOwner) return;
+            if (disposed || director.state()?.owner !== currentOwner) return;
             refresh();
-            eventNotice = done ? (action === 'roll' ? '事件已准备，继续主聊天即可。' : '事件池已更新，等待故事的下一幕。') : '本次未准备新事件，正常聊天可继续。';
-        } catch (e) { if (director.state()?.owner === currentOwner) eventNotice = e.message; }
-        refresh();
+            eventNotice = done ? (action === 'roll' ? '本轮事件已启用，继续主聊天即可。' : '事件池已更新，等待故事的下一幕。') : '本次未启用新事件，请检查连接或稍后重试。';
+        } catch (e) { if (!disposed && director.state()?.owner === currentOwner) eventNotice = e.message; }
+        finally { if (eventTask === token) eventTask = null; if (Date.now() >= animationUntil) diceAnimating = false; if (!disposed) refresh(); }
     }
     async function send(text = input.value) {
         if (!String(text).trim() || director.discussion?.chatTask) return;
@@ -112,6 +195,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     }
     function click(event) {
         const target = event.target.closest('button'); if (!target) return;
+        if (target.dataset.size) { try { setSize(target.dataset.size, true); } catch (e) { notice = e.message; refresh(); } return; }
         if (target.dataset.view) { view(target.dataset.view); return; }
         if (target.dataset.starter) { void send(target.dataset.starter); return; }
         const action = target.dataset.window; if (!action) return;
@@ -119,7 +203,12 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         try {
             const proposal = director.state()?.discussion.proposal;
             if (action === 'close') { window.hidden = true; lastFocus?.focus?.(); }
-            else if (action === 'maximize') { window.classList.toggle('red-maximized'); target.setAttribute('aria-label', window.classList.contains('red-maximized') ? '还原窗口' : '放大窗口'); }
+            else if (action === 'maximize') {
+                window.classList.toggle('red-maximized'); const maximized = window.classList.contains('red-maximized');
+                for (const property of ['width', 'height']) window.style.removeProperty(property);
+                target.setAttribute('aria-label', maximized ? '还原窗口' : '放大窗口');
+                for (const item of window.querySelectorAll('[data-size]')) item.setAttribute('aria-pressed', String(!maximized && item.dataset.size === window.dataset.size));
+            }
             else if (action === 'send') { void send(); return; }
             else if (action === 'stop') director.discussion.stop();
             else if (action === 'accept') director.discussion.accept(proposal?.id);
@@ -135,23 +224,23 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(); }
     };
     const launch = event => { const target = event.target.closest('[data-launch]'); if (target) open(target.dataset.launch); };
+    const throwDice = () => { void eventAction('roll'); };
     const change = event => { if (event.target === get('enable-events')) { try { director.update({ enabled: event.target.checked }); } catch (e) { eventNotice = e.message; } refresh(); } };
     const head = window.querySelector('header');
-    const dragStart = event => {
-        if (event.target.closest('button') || event.button !== 0 || window.classList.contains('red-maximized')) return;
-        const rect = window.getBoundingClientRect(); drag = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-        head.setPointerCapture(event.pointerId);
+    const stopMainDrag = makeDraggable(window, head, { canDrag: () => !window.classList.contains('red-maximized') });
+    const stopDiceDrag = makeDraggable(diceDock, floatingDie, { ignoreButtons: false });
+    const stopEventDrag = makeDraggable(eventWindow, eventWindow.querySelector('header'));
+    const miniClick = event => {
+        const action = event.target.closest('[data-mini-action]')?.dataset.miniAction;
+        if (action === 'close') eventWindow.hidden = true;
+        else if (action === 'pool' || action === 'director') { eventWindow.hidden = true; open(action === 'pool' ? 'pool' : 'events'); }
     };
-    const dragMove = event => {
-        if (!drag) return;
-        const width = window.getBoundingClientRect().width, height = window.getBoundingClientRect().height;
-        window.style.left = `${Math.max(0, Math.min(doc.documentElement.clientWidth - width, event.clientX - drag.x))}px`;
-        window.style.top = `${Math.max(0, Math.min(doc.documentElement.clientHeight - height, event.clientY - drag.y))}px`;
-        window.style.right = 'auto'; window.style.bottom = 'auto';
-    };
-    const dragEnd = () => { drag = null; };
     window.addEventListener('click', click); window.addEventListener('change', change); input.addEventListener('keydown', keydown); entry.addEventListener('click', launch);
-    head.addEventListener('pointerdown', dragStart); head.addEventListener('pointermove', dragMove); head.addEventListener('pointerup', dragEnd); head.addEventListener('pointercancel', dragEnd);
+    floatingDie.addEventListener('click', throwDice);
+    eventWindow.addEventListener('click', miniClick);
+    doc.defaultView.addEventListener('resize', reflow);
+    doc.defaultView.visualViewport?.addEventListener('resize', reflow);
+    doc.defaultView.visualViewport?.addEventListener('scroll', reflow);
     const menuButton = doc.createElement('button'); menuButton.id = 'red_director_menu'; menuButton.type = 'button'; menuButton.className = 'list-group-item flex-container flexGap5';
     menuButton.innerHTML = '<i class="fa-solid fa-moon extensionsMenuExtensionButton" aria-hidden="true"></i><span>导演系统-初月</span>';
     const fromMenu = () => open('chat'); menuButton.addEventListener('click', fromMenu);
@@ -161,9 +250,16 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     observer?.observe(doc.body, { childList: true, subtree: true });
     refresh();
     return { refresh, open, dispose() {
+        disposed = true; if (diceTimer) doc.defaultView.clearTimeout(diceTimer);
+        stopMainDrag(); stopDiceDrag(); stopEventDrag();
+        doc.defaultView.removeEventListener('resize', reflow);
+        doc.defaultView.visualViewport?.removeEventListener('resize', reflow);
+        doc.defaultView.visualViewport?.removeEventListener('scroll', reflow);
+        eventWindow.removeEventListener('click', miniClick); eventWindow.remove();
+        floatingDie.removeEventListener('click', throwDice); diceDock.remove();
         diagnosticsUI.dispose();
         observer?.disconnect(); menuButton.removeEventListener('click', fromMenu); menuButton.remove(); entry.removeEventListener('click', launch); entry.remove();
         window.removeEventListener('click', click); window.removeEventListener('change', change); input.removeEventListener('keydown', keydown);
-        head.removeEventListener('pointerdown', dragStart); head.removeEventListener('pointermove', dragMove); head.removeEventListener('pointerup', dragEnd); head.removeEventListener('pointercancel', dragEnd); window.remove();
+        window.remove();
     } };
 }

@@ -373,9 +373,11 @@ export class Director {
         if (s.pendingEvent && !s.pendingEvent.cycleKey) s.pendingEvent = null;
         this.clear(); this.save(ctx, s);
     }
-    async rollNow() {
+    async rollNow({ enable = false } = {}) {
         this.trace('手动掷骰', 'info', '用户点击立即掷骰；这里只准备事件，要正常发送消息才会注入。', {}, undefined, '');
         const ctx = this.context(), s = this.state(ctx);
+        // Enable without starting update()'s background refill: this roll owns the empty-pool request.
+        if (enable && s && !this.busy && !s.enabled) { s.enabled = true; this.save(ctx, s); }
         if (!s?.enabled || this.busy) { this.trace('手动掷骰', 'skip', '当前聊天未开启导演，或主 AI 正在生成。', {}, s?.owner, ''); return false; }
         if (s.pendingEvent) return true;
         if (s.discussion.guide) {
