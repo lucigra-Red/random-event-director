@@ -7,6 +7,6 @@
   "css": "style.css",
   "generate_interceptor": "randomEventDirectorInterceptor",
   "author": "Random Event Director contributors",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "auto_update": false
 }
