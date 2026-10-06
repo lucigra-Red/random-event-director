@@ -4,7 +4,7 @@ import { completionPresets } from './api.js';
 export function mountHeaderUI(host, director, context, doc) {
     host.innerHTML = `<details class="red-headers"><summary>副 AI 头部预设</summary><div class="red-body">
       <p data-header-role="active"></p><label class="red-column">头部方式<select class="text_pole" data-header="mode">
-      <option value="none">不使用头部</option><option value="builtin">使用初月提供的头部</option><option value="native">使用酒馆预设</option></select></label>
+      <option value="builtin">使用初月提供的头部</option><option value="native">使用酒馆预设</option><option value="none">不使用头部</option></select></label>
       <p class="red-help" data-header-role="help"></p>
       <details data-header-role="builtin" hidden><summary>查看初月头部内容</summary><textarea class="text_pole" rows="6" readonly aria-label="初月头部内容"></textarea></details>
       <div data-header-role="native" hidden><label class="red-column">选择酒馆预设<select class="text_pole" data-header="selected"></select></label>
@@ -16,7 +16,7 @@ export function mountHeaderUI(host, director, context, doc) {
     const modeSelect = root.querySelector('[data-header="mode"]');
     root.querySelector('[aria-label="初月头部内容"]').value = BUILTIN_HEADER_TEXT;
     const notice = text => { root.querySelector('[data-header-role="notice"]').textContent = text; };
-    let mode = 'none', selected = '', owner = null, serial = '', catalogKey = '', disposed = false;
+    let mode = 'builtin', selected = '', owner = null, serial = '', catalogKey = '', disposed = false;
     function showMode() {
         const scope = director.state() ? '用于当前聊天' : '保存为新聊天默认值';
         modeSelect.value = mode;

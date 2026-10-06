@@ -1,10 +1,12 @@
+import { CURRENT_VERSION } from './updates.js';
+
 export function mountUI(director, context, doc = document) {
     const host = doc.querySelector('#extensions_settings2') || doc.querySelector('#extensions_settings');
     if (!host) return null;
     doc.querySelector('#random_event_director_panel')?.remove();
     const root = doc.createElement('details');
     root.id = 'random_event_director_panel'; root.className = 'red-panel';
-    root.innerHTML = `<summary>随机事件导演 <small>V0.1.10</small></summary>
+    root.innerHTML = `<summary>随机事件导演 <small>V${CURRENT_VERSION}</small></summary>
       <div class="red-body">
       <p class="red-help">为当前聊天加入偶发情境。先配置副 AI，再开启随机事件。</p>
       <p class="red-help" data-role="settings-scope"></p>

@@ -1,7 +1,7 @@
 export const KEY = 'random_event_director_v1';
 export const DEFAULTS = Object.freeze({ enabled: false, triggerProbability: 25, targetCount: 6,
     refillThreshold: 2, expiryTurns: 7, contextMessages: 16, contextChars: 24000,
-    timeoutSeconds: 45, useCurrentModel: true, outgoingInjection: true, model: '', worldNotes: '', directorPreset: null, headerPreset: null });
+    timeoutSeconds: 45, useCurrentModel: true, outgoingInjection: true, model: '', worldNotes: '', directorPreset: null, headerPreset: Object.freeze(builtinHeaderReference()) });
 const REPLAY = new Set(['regenerate', 'swipe', 'continue', 'append']);
 const ALLOWED = new Set(['normal', 'regenerate', 'swipe', 'continue', 'append']);
 const clamp = (value, fallback, min, max) => Number.isFinite(Number(value))
@@ -15,7 +15,8 @@ export function config(raw = {}) {
         timeoutSeconds: clamp(raw.timeoutSeconds, 45, 5, 180),
         useCurrentModel: raw.useCurrentModel !== false, model: String(raw.model || '').slice(0, 200),
         outgoingInjection: raw.outgoingInjection !== false,
-        worldNotes: String(raw.worldNotes || '').slice(0, 12000), directorPreset: activePreset(raw.directorPreset), headerPreset: activeHeader(raw.headerPreset) };
+        worldNotes: String(raw.worldNotes || '').slice(0, 12000), directorPreset: activePreset(raw.directorPreset),
+        headerPreset: raw.headerPreset === undefined ? builtinHeaderReference() : activeHeader(raw.headerPreset) };
 }
 export function randomInt(max, cryptoApi = globalThis.crypto) {
     if (!Number.isSafeInteger(max) || max < 1 || max > 2 ** 32) throw new Error('Invalid random range');
@@ -496,6 +497,6 @@ export class Director {
     dispose() { this.disposed = true; this.runAbortCleanup?.(); this.runAbortCleanup = null; this.discussion?.cancel(); this.cancelFill(); this.clear(); this.run = null; }
 }
 import { activePreset, generatorText, injectionText, normalizePreset } from './presets.js';
-import { activeHeader, normalizeHeader, headerMessages } from './headers.js';
+import { activeHeader, normalizeHeader, headerMessages, builtinHeaderReference } from './headers.js';
 import { discussionState } from './discussion-state.js';
 import { PERSONA_PREFERENCES_KEY } from './personas.js';

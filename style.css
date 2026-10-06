@@ -318,6 +318,19 @@
 #red_director_window .red-pool-view summary { cursor: pointer; overflow-wrap: anywhere; }
 #red_director_window .red-pool-view p { white-space: pre-wrap; overflow-wrap: anywhere; }
 #red_director_window .red-pool-link { width: 100%; margin-bottom: 12px; color: #efd1a0; }
+#red_director_window .red-update-banner { display: flex; flex: none; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #695637; background: #302c29; color: #f2d29e; font-size: .8em; }
+#red_director_window .red-update-banner[hidden], #red_director_entry .red-update-badge[hidden] { display: none; }
+#red_director_window .red-update-banner span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#red_director_window .red-update-banner button { flex: none; padding: 4px 7px; font-size: inherit; }
+#red_director_entry .red-update-badge { margin-left: 8px; padding: 2px 5px; border-radius: 5px; background: #60462a; color: #ffe0a8; font-size: .7em; white-space: nowrap; }
+#red_director_window .red-tabs .red-has-update::after { content: ''; display: inline-block; width: 5px; height: 5px; margin-left: 3px; border-radius: 50%; background: #f4b565; vertical-align: middle; }
+#red_director_window .red-update-settings { border: 1px solid #38455e; border-radius: 9px; padding: 12px; margin-bottom: 14px; font-size: .85em; }
+#red_director_window .red-update-settings strong { color: #f0d2a0; }
+#red_director_window .red-update-settings label { display: flex; align-items: center; gap: 6px; }
+#red_director_window .red-update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+#red_director_window .red-update-actions a { color: #f0d2a0; }
+#red_director_window .red-update-settings small { display: block; color: var(--red-muted); }
+#red_director_window [data-update="status"]:empty { display: none; }
 #red_director_window .red-tabs button { white-space: nowrap; min-width: 0; }
 @media (max-width: 600px) {
     #red_director_window .red-tabs { gap: 1px; padding-left: 6px; padding-right: 6px; }

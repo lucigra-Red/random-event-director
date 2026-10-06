@@ -1,4 +1,5 @@
 import { chatIdentity } from './engine.js';
+import { CURRENT_VERSION } from './updates.js';
 
 const detailKeys = new Set(['count', 'needed', 'characters', 'contextMessages', 'probability', 'roll', 'poolCount',
     'guideCount', 'expectedCharacters', 'scannedCharacters', 'eventFound', 'storeReadable', 'storeMatches', 'assembledHook', 'requestHook', 'truncated']);
@@ -41,7 +42,7 @@ export function errorCategory(error) {
     return '发生异常；请结合当前阶段检查，原始错误内容不写入诊断日志';
 }
 export class Diagnostics {
-    constructor(context, { now = () => new Date(), limit = 300, version = '0.1.10' } = {}) {
+    constructor(context, { now = () => new Date(), limit = 300, version = CURRENT_VERSION } = {}) {
         Object.assign(this, { context, now, limit, version });
         this.entries = []; this.scopes = new Map(); this.listeners = new Set(); this.enabled = true; this.sequence = 0; this.runs = 0;
     }
