@@ -4,7 +4,7 @@ export function mountPresetUI(host, director, context, doc) {
     host.innerHTML = `<details class="red-presets"><summary>导演预设管理</summary>
       <div class="red-body"><p data-preset-role="active"></p>
       <label class="red-column">选择预设<select class="text_pole" data-preset-field="selected"></select></label>
-      <p class="red-help">选择后载入编辑器；点击“应用到本聊天”才生效。预设库跨聊天共享，当前聊天保存独立快照。</p>
+      <p class="red-help" data-preset-role="scope"></p>
       <label class="red-column">预设名称<input class="text_pole" data-preset-field="name" maxlength="80"></label>
       <label class="red-column">副 AI 事件生成提示词<textarea class="text_pole" rows="7" data-preset-field="generatorPrompt"></textarea></label>
       <label class="red-column">主 AI 隐藏注入模板<textarea class="text_pole" rows="7" data-preset-field="injectionTemplate"></textarea></label>
@@ -46,14 +46,17 @@ export function mountPresetUI(host, director, context, doc) {
     function refresh() {
         if (disposed) return;
         try {
-            const state = director.state(), active = activePreset(state?.directorPreset);
+            const chat = director.state(), state = director.settingsState(), active = activePreset(state?.directorPreset);
             const serial = JSON.stringify(active);
             if (owner !== state?.owner || snapshot !== serial) {
                 draft = { ...active }; owner = state?.owner; snapshot = serial;
                 role('notice').textContent = ''; libraryFingerprint = '';
                 paint();
             }
-            role('active').textContent = `当前聊天预设：${active.name}`;
+            role('active').textContent = `${chat ? '当前聊天预设' : '新聊天默认预设'}：${active.name}`;
+            root.querySelector('[data-preset-action="apply"]').textContent = chat ? '应用到本聊天' : '设为新聊天默认';
+            role('scope').textContent = chat ? '预设库跨聊天共享；应用后只改变当前聊天，保留独立快照。'
+                : '可以编辑、保存和导入导演预设。应用后用于尚未设置初月的新聊天，已有聊天保持原设置。';
             const presets = catalog();
             if (!presets.some(p => p.id === draft.id)) presets.push({ ...draft, name: `${draft.name}（聊天快照）` });
             const fingerprint = JSON.stringify(presets.map(p => [p.id, p.name]));
@@ -77,7 +80,7 @@ export function mountPresetUI(host, director, context, doc) {
         try {
             if (key === 'selected') {
                 draft = { ...(catalog().find(p => p.id === get('selected').value) || draft) };
-                refresh(); paint(); role('notice').textContent = '已载入编辑器；点击“应用到本聊天”后生效。';
+                refresh(); paint(); role('notice').textContent = director.state() ? '已载入编辑器；点击“应用到本聊天”后生效。' : '已载入编辑器；点击“设为新聊天默认”后生效。';
             } else if (key === 'file' && event.target.files?.[0]) {
                 const file = event.target.files[0], origin = director.state()?.owner;
                 if (file.size > 1500000) throw new Error('预设文件不能超过 1.5 MB');
@@ -97,15 +100,15 @@ export function mountPresetUI(host, director, context, doc) {
                 draft = { ...DEFAULT_PRESET, id: 'new', name: '新的导演预设' }; libraryFingerprint = '';
                 refresh(); paint(); get('name').focus(); role('notice').textContent = '已新建草稿；修改名称和提示词后点击“保存预设”。';
             } else if (action === 'apply') {
-                director.applyPreset(read()); refresh(); role('notice').textContent = '预设已应用。新事件池使用新规则，已准备事件及重生成保留原模板。';
+                director.applyPreset(read()); refresh(); role('notice').textContent = director.state() ? '预设已应用。新事件池使用新规则，已准备事件及重生成保留原模板。' : '已保存新聊天默认预设；已有聊天不变。';
             } else if (action === 'save' || action === 'copy') {
                 draft = director.presets.save(read(), action === 'copy'); libraryFingerprint = '';
                 director.applyPreset(draft); refresh(); paint(); role('notice').textContent = `已保存并应用：${draft.name}`;
             } else if (action === 'reset') {
                 director.applyPreset(DEFAULT_PRESET); refresh(); role('notice').textContent = '已恢复默认预设；自定义预设库仍保留。';
             } else if (action === 'delete') {
-                director.presets.remove(draft.id); draft = activePreset(director.state()?.directorPreset);
-                libraryFingerprint = ''; refresh(); paint(); role('notice').textContent = '已从预设库删除；当前聊天的独立快照仍可继续使用。';
+                director.presets.remove(draft.id); draft = activePreset(director.settingsState()?.directorPreset);
+                libraryFingerprint = ''; refresh(); paint(); role('notice').textContent = '已从预设库删除；已保存的独立快照仍可继续使用。';
             } else if (action === 'export' || action === 'export-all') {
                 get('json').value = director.presets.exportJSON(action === 'export' ? read() : null);
                 role('notice').textContent = 'JSON 已写入下方文本框，可复制或下载。';

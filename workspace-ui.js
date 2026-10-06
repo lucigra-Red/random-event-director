@@ -41,7 +41,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     doc.body.append(window, diceDock, eventWindow);
     const floatingDie = diceDock.querySelector('button'), diceFeedback = diceDock.querySelector('.red-dice-feedback');
     const entry = doc.createElement('div'); entry.id = 'red_director_entry'; entry.className = 'inline-drawer red-extension-entry';
-    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.9</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="events">随机事件</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
+    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.10</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="events">随机事件</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
     settingsHost.append(entry); window.querySelector('[data-page="settings"]').append(settings); settings.open = true;
     const get = name => window.querySelector(`[data-window-role="${name}"]`);
     const personaSettings = doc.createElement('div'); personaSettings.className = 'red-persona-settings';
@@ -77,6 +77,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         if (page === 'logs') diagnosticsUI.refresh();
     }
     function open(name = 'chat') {
+        if (name === 'chat' && !director.state()) name = 'settings';
         lastFocus = doc.activeElement; window.hidden = false; view(name); refresh(); placeWidget(window);
         if (name === 'chat' && !doc.defaultView.matchMedia('(pointer: coarse)').matches) input.focus();
     }
@@ -110,7 +111,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     function refresh() {
         const state = director.state(), disc = state?.discussion, currentOwner = state?.owner || null;
         if (owner !== currentOwner) { owner = currentOwner; shownFailureId = null; input.value = ''; notice = ''; eventNotice = ''; transcriptKey = ''; pendingId = null; get('event-reveal').open = false; eventWindow.hidden = true; mini('reveal').open = false; }
-        const ctx = context(); get('owner').textContent = state ? `${ctx.name2 || '当前角色'} · 当前聊天` : '未打开聊天';
+        const ctx = context(); get('owner').textContent = state ? `${ctx.name2 || '当前角色'} · 当前聊天` : '未打开聊天 · 正在配置新聊天默认值';
         const persona = discussionPersona(disc?.persona);
         get('persona').value = persona.id; get('persona').disabled = !state || Boolean(director.discussion?.chatTask);
         get('persona-hint').textContent = persona.description;

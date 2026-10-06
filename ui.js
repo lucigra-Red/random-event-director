@@ -4,10 +4,11 @@ export function mountUI(director, context, doc = document) {
     doc.querySelector('#random_event_director_panel')?.remove();
     const root = doc.createElement('details');
     root.id = 'random_event_director_panel'; root.className = 'red-panel';
-    root.innerHTML = `<summary>随机事件导演 <small>V0.1.9</small></summary>
+    root.innerHTML = `<summary>随机事件导演 <small>V0.1.10</small></summary>
       <div class="red-body">
       <p class="red-help">为当前聊天加入偶发情境。先配置副 AI，再开启随机事件。</p>
-      <label><input type="checkbox" data-setting="enabled"> 开启本聊天的随机事件导演</label>
+      <p class="red-help" data-role="settings-scope"></p>
+      <label><input type="checkbox" data-setting="enabled"> <span data-role="enabled-label">开启本聊天的随机事件导演</span></label>
       <div class="red-grid">
         <label>随机事件概率（%）<input class="text_pole" type="number" min="0" max="100" data-setting="triggerProbability"></label>
         <label>近期消息数量<input class="text_pole" type="number" min="1" max="40" data-setting="contextMessages"></label>
@@ -42,8 +43,10 @@ export function mountUI(director, context, doc = document) {
     let notice = '', lastOwner = null, workspace;
     const field = name => root.querySelector(`[data-role="${name}"]`);
     function refresh() {
-        let s;
-        try { s = director.state(); } catch (e) { field('status').textContent = e.message; return; }
+        let s, chat;
+        try { chat = director.state(); s = director.settingsState(); } catch (e) { field('status').textContent = e.message; return; }
+        field('settings-scope').textContent = chat ? '正在编辑当前聊天的设置。' : '未打开聊天：可以配置 API 和预设；下方选项保存为新聊天默认值，不改变已有聊天。';
+        field('enabled-label').textContent = chat ? '开启本聊天的随机事件导演' : '新聊天默认开启随机事件导演';
         if (s?.owner !== lastOwner) { notice = ''; lastOwner = s?.owner; }
         if (!s?.pendingEvent && notice === '随机事件已准备，将在下一次正常生成时生效。') notice = '';
         for (const el of root.querySelectorAll('[data-setting]')) {
@@ -52,18 +55,18 @@ export function mountUI(director, context, doc = document) {
             if (el.type === 'checkbox') el.checked = Boolean(s?.[name]);
             else if (doc.activeElement !== el) el.value = s?.[name] ?? '';
         }
-        field('count').textContent = s ? `当前可用事件池：${s.eventPool.length} / ${s.targetCount}${director.fill ? ' · 副 AI 生成中…' : ''}` : '请先打开一个聊天。';
-        field('pending').textContent = s?.pendingEvent ? '随机事件已准备，将在对应的下一次正常生成时生效。' : '当前没有待用事件。';
-        field('recent').textContent = `最近触发：${s?.recentEvent?.title || '暂无'}`;
-        field('status').textContent = s?.error || notice || (s?.refillStopped && !director.fill && !director.discussion?.guideTask ? '事件生成已暂停；请使用生成按钮或骰子小窗中的“重试生成”。' : '');
-        for (const button of root.querySelectorAll('[data-action]')) button.disabled = !s?.enabled || director.busy || Boolean(director.fill);
+        field('count').textContent = chat ? `当前可用事件池：${chat.eventPool.length} / ${chat.targetCount}${director.fill ? ' · 副 AI 生成中…' : ''}` : '打开聊天后才能生成事件。';
+        field('pending').textContent = chat?.pendingEvent ? '随机事件已准备，将在对应的下一次正常生成时生效。' : '当前没有待用事件。';
+        field('recent').textContent = `最近触发：${chat?.recentEvent?.title || '暂无'}`;
+        field('status').textContent = chat?.error || notice || (chat?.refillStopped && !director.fill && !director.discussion?.guideTask ? '事件生成已暂停；请使用生成按钮或骰子小窗中的“重试生成”。' : '');
+        for (const button of root.querySelectorAll('[data-action]')) button.disabled = !chat?.enabled || director.busy || Boolean(director.fill);
         const list = root.querySelector('#red-models'); list.replaceChildren();
         const models = new Set();
         for (const select of doc.querySelectorAll('select[id*="model"]')) for (const option of select.options) {
             if (option.value && !option.disabled) models.add(option.value);
         }
         for (const model of models) { const option = doc.createElement('option'); option.value = model; list.append(option); }
-        if (field('pool').open) showEvents(s);
+        if (field('pool').open) showEvents(chat);
         field('current-model').hidden = director.connection?.read().mode === 'independent';
         connectionUI.refresh(); headerUI.refresh();
         presetUI.refresh();

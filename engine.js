@@ -88,6 +88,7 @@ export function poolPrompt(ctx, state, count) {
             .slice(-30).map(e => e.content) }) }];
 }
 
+export const DEFAULT_SETTINGS_KEY = 'random_event_director_default_settings_v1';
 export class Director {
     constructor({ context, request, inject, persist, changed = () => {}, log = console.warn,
         rng = randomInt, makeId = uuid, now = Date.now, defer = fn => setTimeout(fn, 0), presets = null, headers = null, connection = null, diagnostics = null }) {
@@ -100,7 +101,7 @@ export class Director {
         if (!owner) return null;
         let state = ctx.chatMetadata[KEY];
         if (!state || state.version !== 1 || state.owner !== owner) {
-            state = { ...config(state), version: 1, owner, eventPool: [], cycles: {}, pendingEvent: null,
+            state = { ...config({ ...ctx.extensionSettings?.[DEFAULT_SETTINGS_KEY], ...state }), version: 1, owner, eventPool: [], cycles: {}, pendingEvent: null,
                 recentEvent: null, eventPoolGenerationTurn: 0, refillAttempt: null, refillStopped: false, generationFailure: null, error: '' };
             ctx.chatMetadata[KEY] = state;
         }
@@ -111,6 +112,17 @@ export class Director {
         state.refillStopped = state.refillStopped === true;
         discussionState(state, ctx.extensionSettings?.[PERSONA_PREFERENCES_KEY]?.defaultPersona);
         return state;
+    }
+    settingsState(ctx = this.context()) {
+        return this.state(ctx) || (ctx.extensionSettings ? config(ctx.extensionSettings[DEFAULT_SETTINGS_KEY]) : null);
+    }
+    saveDefaults(values, ctx = this.context()) {
+        if (!ctx.extensionSettings) throw new Error('酒馆扩展设置不可用，暂时无法保存默认设置');
+        const next = config({ ...ctx.extensionSettings[DEFAULT_SETTINGS_KEY], ...values });
+        ctx.extensionSettings[DEFAULT_SETTINGS_KEY] = next;
+        try { Promise.resolve(ctx.saveSettingsDebounced?.()).catch(e => this.log('[随机事件导演] 默认设置保存失败', e)); }
+        catch (e) { this.log('[随机事件导演] 默认设置保存失败', e); }
+        this.changed(); return next;
     }
     trace(stage, status, message, details = {}, owner, runId = this.diagnosticRun?.id || '') {
         try { this.diagnostics?.record(stage, status, message, details, { owner, runId }); } catch { /* optional diagnostics */ }
@@ -143,7 +155,7 @@ export class Director {
     }
     update(values) {
         const ctx = this.context(), s = this.state(ctx);
-        if (!s) return;
+        if (!s) { this.saveDefaults(values, ctx); return; }
         Object.assign(s, config({ ...s, ...values }));
         if (!s.enabled) { this.runAbortCleanup?.(); this.runAbortCleanup = null; this.cancelFill(); this.clear(); this.run = null; this.busy = false; }
         this.save(ctx, s);
@@ -153,10 +165,10 @@ export class Director {
     applyHeader(raw) {
         if (this.busy) throw new Error('请等待主生成结束后再应用头部预设');
         const next = raw ? normalizeHeader(raw) : null, ctx = this.context(), s = this.state(ctx);
-        if (!s) throw new Error('请先打开一个聊天');
+        if (!s) { this.saveDefaults({ headerPreset: next }, ctx); return; }
         if (next && !next.id) next.id = this.makeId();
-        if (JSON.stringify([s.headerPreset?.nativePresetName, s.headerPreset?.messages, s.headerPreset?.generation])
-            !== JSON.stringify([next?.nativePresetName, next?.messages, next?.generation])) {
+        if (JSON.stringify([s.headerPreset?.builtinHeader, s.headerPreset?.nativePresetName, s.headerPreset?.messages, s.headerPreset?.generation])
+            !== JSON.stringify([next?.builtinHeader, next?.nativePresetName, next?.messages, next?.generation])) {
             this.cancelFill(); s.eventPool = []; s.refillAttempt = null;
         }
         s.headerPreset = next; s.error = ''; this.save(ctx, s);
@@ -176,8 +188,8 @@ export class Director {
     }
     applyPreset(raw) {
         const preset = normalizePreset(raw), ctx = this.context(), s = this.state(ctx);
-        if (!s) throw new Error('请先打开一个聊天');
         if (this.busy) throw new Error('请等待主生成结束后再应用预设');
+        if (!s) { this.saveDefaults({ directorPreset: preset }, ctx); return preset; }
         const old = activePreset(s.directorPreset);
         const different = ['generatorPrompt', 'injectionTemplate', 'completionPresetName'].some(key => old[key] !== preset[key]);
         if (different) {
