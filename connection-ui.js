@@ -11,7 +11,9 @@ export function mountConnectionUI(host, director, doc) {
         <label class="red-column">选择模型<select class="text_pole" data-connection-role="models"><option value="">先拉取模型，或在上方手动填写</option></select></label>
         <p class="red-help">拉取使用上方填写的地址和密钥。选择模型后点击保存；无需先填写模型 ID。</p>
         <p class="red-help">支持 OpenAI 兼容接口。配置保存到酒馆扩展设置，密钥不随导演或头部预设导出。</p>
-      </div><button type="button" class="menu_button" data-connection-action="save">保存副 AI 配置</button>
+      </div><label class="checkbox_label"><input type="checkbox" data-connection="excludeSampling">排除温度与采样参数（兼容模式）</label>
+      <p class="red-help">勾选后，副 AI 的事件生成和小窗讨论不发送 presence_penalty、frequency_penalty、top_p、top_k、temperature 及 reasoning_effort（推理强度），使用接口默认值。仅影响副 AI，勾选立即保存。</p>
+      <button type="button" class="menu_button" data-connection-action="save">保存副 AI 配置</button>
       <p class="red-help">连接方式切换后立即生效。使用当前酒馆连接时，直接沿用主 API 的地址与密钥，无需填写副 API；独立地址、密钥和模型修改后请点击保存。</p><p data-connection-role="notice" aria-live="polite"></p></div></details>`;
     const root = host.querySelector('.red-connection'), field = key => root.querySelector(`[data-connection="${key}"]`);
     const modelList = root.querySelector('[data-connection-role="models"]'), modelButton = root.querySelector('[data-connection-action="models"]');
@@ -31,6 +33,7 @@ export function mountConnectionUI(host, director, doc) {
         if (serial !== fingerprint) {
             const previous = source();
             for (const key of ['mode', 'endpoint', 'apiKey', 'model']) field(key).value = config[key];
+            field('excludeSampling').checked = config.excludeSampling === true;
             if (source() !== previous) invalidateModels();
             fingerprint = serial; display();
         }
@@ -40,7 +43,8 @@ export function mountConnectionUI(host, director, doc) {
     }
     const save = () => {
         try {
-            director.applyConnection(Object.fromEntries(['mode', 'endpoint', 'apiKey', 'model'].map(k => [k, field(k).value])));
+            director.applyConnection({ ...Object.fromEntries(['mode', 'endpoint', 'apiKey', 'model'].map(k => [k, field(k).value])),
+                excludeSampling: field('excludeSampling').checked });
             refresh(); root.querySelector('[data-connection-role="notice"]').textContent = '副 AI 配置已保存。';
         } catch (e) {
             field('mode').value = director.connection?.read().mode || 'current'; display();
@@ -74,6 +78,7 @@ export function mountConnectionUI(host, director, doc) {
     };
     const change = event => {
         if (event.target.dataset.connection === 'mode') { invalidateModels(); save(); }
+        else if (event.target.dataset.connection === 'excludeSampling') save();
         else if (event.target === modelList && modelSource === source() && modelList.value) field('model').value = modelList.value;
     };
     const click = event => {

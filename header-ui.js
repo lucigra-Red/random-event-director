@@ -8,7 +8,7 @@ export function mountHeaderUI(host, director, context, doc) {
       <p class="red-help" data-header-role="help"></p>
       <details data-header-role="builtin" hidden><summary>查看初月头部内容</summary><textarea class="text_pole" rows="6" readonly aria-label="初月头部内容"></textarea></details>
       <div data-header-role="native" hidden><label class="red-column">选择酒馆预设<select class="text_pole" data-header="selected"></select></label>
-      <p class="red-help">直接复用酒馆预设已启用的提示词及生成参数。预设的添加和编辑在酒馆中操作。</p>
+      <p class="red-help">复用酒馆预设已启用的提示词，不带入温度、采样、推理强度或输出长度等参数。预设的添加和编辑在酒馆中操作；API 连接单独配置。</p>
       <button type="button" class="menu_button" data-header-action="refresh">刷新酒馆预设列表</button></div>
       <div class="red-actions"><button type="button" class="menu_button" data-header-action="apply">应用头部预设</button></div>
       <p data-header-role="notice" aria-live="polite"></p></div></details>`;
@@ -68,7 +68,7 @@ export function mountHeaderUI(host, director, context, doc) {
                 if (mode === 'native') nativePreset(reference, context());
                 director.applyHeader(reference); refresh(); notice(!director.state() ? '已保存新聊天的默认头部；已有聊天不变。'
                     : mode === 'builtin' ? '已应用初月头部，用于当前聊天的剧情讨论和事件生成。'
-                    : mode === 'native' ? '已应用酒馆预设；提示词和参数随酒馆中保存的修改更新。' : '已关闭额外头部。');
+                    : mode === 'native' ? '已应用酒馆预设的提示词；生成参数不随头部预设切换。' : '已关闭额外头部。');
             }
         } catch (e) { notice(e.message); }
     };

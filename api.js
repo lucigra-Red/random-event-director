@@ -1,5 +1,46 @@
 import { apiBase, connectionConfig } from './connections.js';
-import { normalizeGeneration, nativePreset, nativeSampling, nativeGenerationPreset } from './headers.js';
+import { nativePreset } from './headers.js';
+
+const SAMPLING_KEYS = Object.freeze(['presence_penalty', 'frequency_penalty', 'top_p', 'top_k', 'temperature']);
+const COMPATIBILITY_KEYS = [...SAMPLING_KEYS, 'reasoning_effort'];
+const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+function readCustomConfig(raw) {
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    try { return JSON.parse(raw); }
+    catch {
+        const parser = globalThis.SillyTavern?.libs?.yaml;
+        if (!parser?.parse) throw new Error('酒馆缺少 YAML 解析接口，请更新酒馆或将自定义请求参数改为 JSON。');
+        // Invalid YAML is also ignored by the host backend.
+        try { return parser.parse(raw); } catch { return null; }
+    }
+}
+function normalizeReasoning(body) {
+    const value = body.reasoning_effort === 'min' ? 'minimal' : body.reasoning_effort;
+    if (REASONING_EFFORTS.has(value)) body.reasoning_effort = value;
+    else delete body.reasoning_effort; // "auto" is a host setting, not an API value.
+}
+function omitSampling(payload, enabled) {
+    // Filter after the host applies its current preset, without changing the host's shared settings.
+    const result = { ...payload };
+    if (enabled) for (const key of COMPATIBILITY_KEYS) delete result[key];
+    else if (['custom', 'openai', 'azure_openai'].includes(result.chat_completion_source)) normalizeReasoning(result);
+    if (result.chat_completion_source === 'custom') {
+        // The server merges custom_include_body later. Its exclusion list must also remove these keys.
+        if (enabled) {
+            const parsed = readCustomConfig(result.custom_exclude_body);
+            const existing = Array.isArray(parsed) ? parsed.filter(key => typeof key === 'string')
+                : typeof parsed === 'string' ? [parsed] : parsed && typeof parsed === 'object' ? Object.keys(parsed) : [];
+            result.custom_exclude_body = JSON.stringify([...new Set([...existing, ...COMPATIBILITY_KEYS])]);
+        } else {
+            const extra = readCustomConfig(result.custom_include_body);
+            if (extra && typeof extra === 'object' && !Array.isArray(extra) && Object.hasOwn(extra, 'reasoning_effort')) {
+                const normalized = { ...extra }; normalizeReasoning(normalized);
+                if (normalized.reasoning_effort !== extra.reasoning_effort) result.custom_include_body = JSON.stringify(normalized);
+            }
+        }
+    }
+    return result;
+}
 
 export async function requestModels(ctx, connection, signal, fetchImpl = globalThis.fetch) {
     const own = connectionConfig(connection);
@@ -39,27 +80,21 @@ export async function requestModels(ctx, connection, signal, fetchImpl = globalT
 
 export async function requestPool(ctx, messages, settings, signal, connection = { mode: 'current' }) {
     const own = connectionConfig(connection);
-    const native = nativePreset(settings.headerPreset, ctx);
-    const sampling = native ? nativeSampling(native) : normalizeGeneration(settings.headerPreset?.generation);
+    // Headers supply text through the caller's messages, never generation parameters.
+    // Validate a selected native reference, but do not pass it to the host request converter.
+    nativePreset(settings.headerPreset, ctx);
     if (own.mode === 'independent') {
         const service = ctx.ChatCompletionService;
         if (!service?.sendRequest) throw new Error('此酒馆版本缺少独立请求服务，请更新 SillyTavern');
         const endpoint = apiBase(own.endpoint);
         if (!own.model) throw new Error('请填写副 AI 模型 ID');
         if (/\r|\n/.test(own.apiKey)) throw new Error('API 密钥不能包含换行');
-        const presetName = settings.headerPreset ? '' : settings.directorPreset?.completionPresetName || '';
-        const preset = native || (presetName ? ctx.getPresetManager?.('openai')?.getCompletionPresetByName?.(presetName) : {});
-        if (!preset || typeof preset !== 'object') throw new Error(`副 AI 的酒馆生成参数预设不存在：${presetName}`);
         // Start with a fresh payload. Never inherit another connection's credentials, URL, body or headers.
         const payload = { chat_completion_source: 'custom', custom_url: endpoint,
             custom_include_headers: JSON.stringify({ Authorization: own.apiKey ? `Bearer ${own.apiKey}` : '' }),
             custom_prompt_post_processing: '', model: own.model, messages, stream: false, max_tokens: 2200, n: 1, temperature: 0.8 };
-        for (const key of ['temperature', 'top_p', 'top_k', 'frequency_penalty', 'presence_penalty']) {
-            if (Number.isFinite(preset[key])) payload[key] = preset[key];
-        }
-        Object.assign(payload, sampling);
         signal.throwIfAborted();
-        try { return (await service.sendRequest(payload, true, signal)).content; }
+        try { return (await service.sendRequest(omitSampling(payload, own.excludeSampling), true, signal)).content; }
         catch (e) {
             const message = String(e?.message || '副 AI 请求失败');
             throw new Error(own.apiKey ? message.replaceAll(own.apiKey, '[已隐藏]') : message);
@@ -67,27 +102,23 @@ export async function requestPool(ctx, messages, settings, signal, connection = 
     }
     if (ctx.onlineStatus === 'no_connection') throw new Error('请先连接酒馆 API');
     if (!settings.useCurrentModel && !settings.model.trim()) throw new Error('请选择或填写副 AI 模型 ID');
-    const presetName = settings.headerPreset ? '' : settings.directorPreset?.completionPresetName || '';
-    const preset = native ? nativeGenerationPreset(native) : (presetName ? ctx.getPresetManager?.(ctx.mainApi)?.getCompletionPresetByName?.(presetName) : {});
-    if (!preset || typeof preset !== 'object') throw new Error(`副 AI 的酒馆生成参数预设不存在：${presetName}；请选择其他预设`);
-    const overrides = { stream: false, max_tokens: 2200, n: 1, ...sampling };
-    if (!native && !presetName && sampling.temperature === undefined) overrides.temperature = 0.8;
+    const overrides = { stream: false, max_tokens: 2200, n: 1, temperature: 0.8 };
     if (!settings.useCurrentModel) overrides.model = settings.model.trim();
     if (ctx.mainApi === 'openai') {
         const service = ctx.ChatCompletionService;
         if (!service?.presetToGeneratePayload || !service?.sendRequest) throw new Error('此酒馆版本缺少 ChatCompletionService；请更新标准 SillyTavern');
-        const payload = await service.presetToGeneratePayload(structuredClone(preset), {}, { ...overrides, messages });
+        const payload = await service.presetToGeneratePayload({}, {}, { ...overrides, messages });
         signal.throwIfAborted();
-        const result = await service.sendRequest(payload, true, signal);
+        const result = await service.sendRequest(omitSampling(payload, own.excludeSampling), true, signal);
         return result.content;
     }
     if (ctx.mainApi === 'textgenerationwebui') {
         const service = ctx.TextCompletionService;
         if (!service?.presetToGeneratePayload || !service?.sendRequest) throw new Error('此酒馆版本缺少 TextCompletionService');
         const prompt = messages.map(m => `${m.role.toUpperCase()}:\n${m.content}`).join('\n\n') + '\n\nASSISTANT:\n';
-        const payload = await service.presetToGeneratePayload(structuredClone(preset), {}, { ...overrides, prompt });
+        const payload = await service.presetToGeneratePayload({}, {}, { ...overrides, prompt });
         signal.throwIfAborted();
-        return (await service.sendRequest(payload, true, signal)).content;
+        return (await service.sendRequest(omitSampling(payload, own.excludeSampling), true, signal)).content;
     }
     throw new Error('V0.1 副 AI 支持酒馆 Chat Completion 和 Text Completion 连接；当前 API 暂不支持');
 }

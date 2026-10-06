@@ -15,6 +15,8 @@ export function mountUI(director, context, doc = document) {
         <label>随机事件概率（%）<input class="text_pole" type="number" min="0" max="100" data-setting="triggerProbability"></label>
         <label>近期消息数量<input class="text_pole" type="number" min="1" max="40" data-setting="contextMessages"></label>
       </div>
+      <label><input type="checkbox" data-setting="includeHiddenMessages"> 读取隐藏楼层</label>
+      <p class="red-help">勾选后，后续事件生成和小窗讨论也会读取隐藏楼层，仍按近期消息数量与字数上限截取。不改变主聊天的隐藏状态。</p>
       <details><summary>高级设置</summary><div class="red-grid">
         <label><input type="checkbox" data-setting="outgoingInjection"> 增强事件注入</label>
         <label>事件池目标数量<input class="text_pole" type="number" min="1" max="20" data-setting="targetCount"></label>
