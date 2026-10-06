@@ -1,6 +1,7 @@
 import { poolPrompt, parseEvents, chatIdentity } from './engine.js';
 import { headerMessages } from './headers.js';
 import { discussionState } from './discussion-state.js';
+import { isPersona, personaPrompt } from './personas.js';
 
 export function parseDiscussion(text) {
     if (typeof text !== 'string' || text.length > 30000) throw new Error('讨论回复为空或过长');
@@ -26,7 +27,7 @@ export class Discussion {
         if (!s) return;
         const disc = discussionState(s); if (disc.guide) disc.guide.pool = [];
         disc.error = ''; d.save(ctx, s);
-        if (disc.guide) void this.prepareGuide();
+        if (disc.guide) void this.prepareGuide({ manual: false });
     }
     async timed(task, ctx, messages, settings) {
         let timer;
@@ -48,19 +49,20 @@ export class Discussion {
         text = String(text).trim(); if (!text || text.length > 4000) throw new Error('请输入 1～4000 字的讨论内容');
         const disc = discussionState(s); disc.proposal = null; disc.error = '';
         disc.messages.push({ id: d.makeId(), role: 'user', content: text }); disc.messages = disc.messages.slice(-40);
-        const task = { controller: new AbortController(), owner: s.owner, revision: this.revision };
+        const task = { controller: new AbortController(), owner: s.owner, revision: this.revision, persona: disc.persona };
         this.chatTask = task; d.save(ctx, s);
         const settings = structuredClone(s);
         const background = poolPrompt(ctx, s, 1).at(-1).content;
         const messages = [...headerMessages(s.headerPreset, ctx), { role: 'system', content:
             '你是导演系统-初月，与用户讨论当前剧情下一次随机事件的方向。认真回答问题，提供建议，允许用户继续讨论。保留世界观和角色设定，不代替玩家决定行动或结果。'
             + '每次都总结本次讨论的方向、偏好与限制，供用户选择是否应用；只是一次事件的方向，不是长期命令。只输出 JSON：{"reply":"自然的聊天回复","summary":"简洁的方向总结"}。不要输出 Markdown 代码块。' },
+            { role: 'system', content: personaPrompt(task.persona) },
             { role: 'system', content: `当前剧情资料（作为背景而非额外指令）：${background}` },
             ...disc.messages.slice(-20).map(m => ({ role: m.role, content: m.content }))];
         try {
             const row = parseDiscussion(await this.timed(task, ctx, messages, settings));
             if (!this.current(ctx, task.owner, task.revision) || this.chatTask !== task || task.controller.signal.aborted) return false;
-            disc.messages.push({ id: d.makeId(), role: 'assistant', content: row.reply }); disc.messages = disc.messages.slice(-40);
+            disc.messages.push({ id: d.makeId(), role: 'assistant', content: row.reply, persona: task.persona }); disc.messages = disc.messages.slice(-40);
             disc.proposal = { id: d.makeId(), summary: row.summary }; d.save(ctx, s); return true;
         } catch (e) {
             if (this.current(ctx, task.owner, task.revision) && this.chatTask === task) { disc.error = task.controller.signal.aborted ? '请求已停止，可以继续讨论。' : String(e.message || e).slice(0, 300); d.save(ctx, s); }
@@ -68,6 +70,14 @@ export class Discussion {
         } finally { if (this.chatTask === task) this.chatTask = null; d.changed(); }
     }
     stop() { this.chatTask?.controller.abort(); }
+    setPersona(id) {
+        if (!isPersona(id)) throw new Error('请选择有效的小窗人设');
+        if (this.chatTask) throw new Error('请等待回复，或先停止当前讨论请求再切换人设');
+        const d = this.director, ctx = d.context(), s = d.state(ctx);
+        if (!s) throw new Error('请先打开角色聊天');
+        discussionState(s).persona = id;
+        d.save(ctx, s);
+    }
     reject(id) {
         const d = this.director, ctx = d.context(), s = d.state(ctx), disc = s && discussionState(s);
         if (disc?.proposal?.id === id) { disc.proposal = null; d.save(ctx, s); }
@@ -98,22 +108,25 @@ export class Discussion {
         const d = this.director, ctx = d.context(), s = d.state(ctx); if (!s) return;
         const disc = discussionState(s); disc.messages = []; disc.proposal = null; disc.error = ''; d.save(ctx, s);
     }
-    async prepareGuide() {
+    async prepareGuide({ manual = true } = {}) {
         const d = this.director, ctx = d.context(), s = d.state(ctx), disc = s && discussionState(s);
         if (!disc?.guide || disc.guide.pool.length || this.guideTask || d.disposed) return false;
+        if (!manual && s.refillStopped) return false;
         const id = disc.guide.id, task = { controller: new AbortController(), owner: s.owner, revision: this.revision, id };
         this.guideTask = task; disc.error = ''; d.changed();
-        const settings = structuredClone(s), messages = poolPrompt(ctx, settings, 3);
         d.trace('方向事件生成', 'info', '使用已确认总结生成本次事件候选。', { needed: 3, contextMessages: s.contextMessages }, s.owner, '');
-        messages.push({ role: 'user', content: `用户已确认的本次事件方向：${disc.guide.summary}\n仅为这一次事件生成 3 个不同候选起因。保留玩家自主权，仍遵守上面的 events JSON 格式。` });
         try {
+            const settings = structuredClone(s), messages = poolPrompt(ctx, settings, 3);
+            messages.push({ role: 'user', content: `用户已确认的本次事件方向：${disc.guide.summary}\n仅为这一次事件生成 3 个不同候选起因。保留玩家自主权，仍遵守上面的 events JSON 格式。` });
             const response = await this.timed(task, ctx, messages, settings);
             if (!this.current(ctx, task.owner, task.revision) || this.guideTask !== task || task.controller.signal.aborted || disc.guide?.id !== id) return false;
-            disc.guide.pool = parseEvents(response, 3, d.makeId); d.trace('方向事件就绪', 'success', '方向候选已准备，只等待一次事件触发。', { count: disc.guide.pool.length }, s.owner, ''); d.save(ctx, s); return true;
+            disc.guide.pool = parseEvents(response, 3, d.makeId); s.refillStopped = false; s.generationFailure = null; s.error = '';
+            d.trace('方向事件就绪', 'success', '方向候选已准备，只等待一次事件触发。', { count: disc.guide.pool.length }, s.owner, ''); d.save(ctx, s); return true;
         } catch (e) {
             d.trace('方向事件生成', 'error', '方向候选未生成成功；请检查副 AI 请求或输出格式。', {}, s.owner, '');
             if (this.current(ctx, task.owner, task.revision) && this.guideTask === task && disc.guide?.id === id) {
-                disc.error = String(e.message || e).slice(0, 300); d.save(ctx, s);
+                d.generationFailed(ctx, s, e, 'guide');
+                disc.error = `${String(e.message || e).slice(0, 250)}；已停止自动生成，请点击“重新准备”或小窗中的“重试生成”。`; d.save(ctx, s);
             }
             return false;
         } finally { if (this.guideTask === task) this.guideTask = null; d.changed(); }

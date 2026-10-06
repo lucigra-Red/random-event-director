@@ -1,7 +1,7 @@
 export const KEY = 'random_event_director_v1';
 export const DEFAULTS = Object.freeze({ enabled: false, triggerProbability: 25, targetCount: 6,
     refillThreshold: 2, expiryTurns: 7, contextMessages: 16, contextChars: 24000,
-    timeoutSeconds: 45, useCurrentModel: true, model: '', worldNotes: '', directorPreset: null, headerPreset: null });
+    timeoutSeconds: 45, useCurrentModel: true, outgoingInjection: true, model: '', worldNotes: '', directorPreset: null, headerPreset: null });
 const REPLAY = new Set(['regenerate', 'swipe', 'continue', 'append']);
 const ALLOWED = new Set(['normal', 'regenerate', 'swipe', 'continue', 'append']);
 const clamp = (value, fallback, min, max) => Number.isFinite(Number(value))
@@ -14,6 +14,7 @@ export function config(raw = {}) {
         contextChars: clamp(raw.contextChars, 24000, 1000, 60000),
         timeoutSeconds: clamp(raw.timeoutSeconds, 45, 5, 180),
         useCurrentModel: raw.useCurrentModel !== false, model: String(raw.model || '').slice(0, 200),
+        outgoingInjection: raw.outgoingInjection !== false,
         worldNotes: String(raw.worldNotes || '').slice(0, 12000), directorPreset: activePreset(raw.directorPreset), headerPreset: activeHeader(raw.headerPreset) };
 }
 export function randomInt(max, cryptoApi = globalThis.crypto) {
@@ -92,6 +93,7 @@ export class Director {
         rng = randomInt, makeId = uuid, now = Date.now, defer = fn => setTimeout(fn, 0), presets = null, headers = null, connection = null, diagnostics = null }) {
         Object.assign(this, { context, request, inject, persist, changed, log, rng, makeId, now, defer, presets, headers, connection, diagnostics });
         this.run = null; this.busy = false; this.fill = null; this.epoch = 0; this.disposed = false;
+        this.backgroundSeen = false; this.runAbortCleanup = null;
     }
     state(ctx = this.context()) {
         const owner = chatIdentity(ctx);
@@ -99,14 +101,15 @@ export class Director {
         let state = ctx.chatMetadata[KEY];
         if (!state || state.version !== 1 || state.owner !== owner) {
             state = { ...config(state), version: 1, owner, eventPool: [], cycles: {}, pendingEvent: null,
-                recentEvent: null, eventPoolGenerationTurn: 0, refillAttempt: null, error: '' };
+                recentEvent: null, eventPoolGenerationTurn: 0, refillAttempt: null, refillStopped: false, generationFailure: null, error: '' };
             ctx.chatMetadata[KEY] = state;
         }
         if (!Array.isArray(state.eventPool) || !state.cycles || typeof state.cycles !== 'object' || Array.isArray(state.cycles)) {
             throw new Error('聊天中的随机事件状态损坏；请关闭插件并重置状态');
         }
         Object.assign(state, config(state));
-        discussionState(state);
+        state.refillStopped = state.refillStopped === true;
+        discussionState(state, ctx.extensionSettings?.[PERSONA_PREFERENCES_KEY]?.defaultPersona);
         return state;
     }
     trace(stage, status, message, details = {}, owner, runId = this.diagnosticRun?.id || '') {
@@ -123,11 +126,26 @@ export class Director {
         this.log('[随机事件导演]', e);
         try { const ctx = this.context(), s = this.state(ctx); if (s) { s.error = String(e.message || e).slice(0, 300); this.save(ctx, s); } } catch { /* never block host */ }
     }
+    generationFailed(ctx, state, error, target) {
+        state.refillStopped = true;
+        state.generationFailure = { id: this.makeId(), target, message: String(error?.message || error || '未知错误').slice(0, 250) };
+        this.save(ctx, state);
+    }
+    async retryGeneration({ enable = false } = {}) {
+        const ctx = this.context(), s = this.state(ctx);
+        if (!s || this.disposed || this.busy || this.fill || this.discussion?.guideTask) return false;
+        if (enable && !s.enabled) { s.enabled = true; this.save(ctx, s); }
+        if (!s.enabled) return false;
+        const done = s.generationFailure?.target === 'guide' && s.discussion.guide
+            ? await this.discussion?.prepareGuide() : await this.refill(true);
+        if (!done || this.context().chatMetadata !== ctx.chatMetadata || chatIdentity(this.context()) !== s.owner) return false;
+        return this.rollNow();
+    }
     update(values) {
         const ctx = this.context(), s = this.state(ctx);
         if (!s) return;
         Object.assign(s, config({ ...s, ...values }));
-        if (!s.enabled) { this.cancelFill(); this.clear(); this.run = null; }
+        if (!s.enabled) { this.runAbortCleanup?.(); this.runAbortCleanup = null; this.cancelFill(); this.clear(); this.run = null; this.busy = false; }
         this.save(ctx, s);
         if (s.enabled && !this.busy) void this.refill();
     }
@@ -137,7 +155,8 @@ export class Director {
         const next = raw ? normalizeHeader(raw) : null, ctx = this.context(), s = this.state(ctx);
         if (!s) throw new Error('请先打开一个聊天');
         if (next && !next.id) next.id = this.makeId();
-        if (JSON.stringify([s.headerPreset?.messages, s.headerPreset?.generation]) !== JSON.stringify([next?.messages, next?.generation])) {
+        if (JSON.stringify([s.headerPreset?.nativePresetName, s.headerPreset?.messages, s.headerPreset?.generation])
+            !== JSON.stringify([next?.nativePresetName, next?.messages, next?.generation])) {
             this.cancelFill(); s.eventPool = []; s.refillAttempt = null;
         }
         s.headerPreset = next; s.error = ''; this.save(ctx, s);
@@ -178,6 +197,9 @@ export class Director {
         if (this.disposed || !s?.enabled || this.busy || this.fill) {
             this.trace('事件池生成', 'skip', '当前聊天未开启、主生成进行中或已有副 AI 请求；本次未生成。', {}, s?.owner, ''); return false;
         }
+        if (!replace && s.refillStopped) {
+            this.trace('事件池生成', 'skip', '上次事件生成失败，已停止自动生成，等待用户手动重试。', {}, s.owner, ''); return false;
+        }
         const turn = assistantTurns(ctx.chat);
         if (s.eventPool.length && turn - s.eventPoolGenerationTurn >= s.expiryTurns) s.eventPool = [];
         if (!replace && s.eventPool.length > Math.min(s.refillThreshold, s.targetCount - 1)) return false;
@@ -208,12 +230,17 @@ export class Director {
             // A top-up keeps the original batch age; replacing/empty pool starts a new age.
             if (replace || !s.eventPool.length) s.eventPoolGenerationTurn = turn;
             s.eventPool = [...(replace ? [] : s.eventPool), ...accepted].slice(0, s.targetCount);
+            s.refillStopped = false; s.generationFailure = null;
             this.trace('事件池就绪', 'success', '候选事件已保存；准备好事件池不等于已经注入主 AI。', { count: accepted.length, poolCount: s.eventPool.length }, s.owner, '');
             this.save(ctx, s);
             return true;
         } catch (e) {
             this.trace('事件池生成', 'error', '事件池未生成成功；可能是请求失败、超时、格式无效或事件重复。', {}, s.owner, '');
-            if (epoch === this.epoch && !this.disposed && this.context().chatMetadata === ctx.chatMetadata) this.fail(e);
+            if (epoch === this.epoch && !this.disposed && this.context().chatMetadata === ctx.chatMetadata
+                && chatIdentity(this.context()) === s.owner) {
+                this.generationFailed(ctx, s, e, 'pool');
+                this.fail(new Error(`${String(e.message || e)}；已停止自动生成，请手动重试。`));
+            }
             return false;
         } finally {
             clearTimeout(timer);
@@ -223,20 +250,51 @@ export class Director {
     }
     start(type = 'normal', options = {}, dryRun = false) {
         if (dryRun) { this.trace('提示词预览', 'skip', '酒馆正在预览提示词；预览不抽取事件，也不运行本插件的注入步骤。', {}, undefined, ''); return; }
+        if (!ALLOWED.has(type)) { this.background(type); return; }
+        if (this.busy && this.run && this.run.metadata === this.context().chatMetadata && !this.run.completed && !this.run.stopped && !this.run.signal?.aborted) {
+            this.run.overlapped = true; this.run.ownershipUncertain = true;
+            this.trace('并发保护', 'warn', '已有主回合时又收到正文生成开始；无法区分两次请求，保留事件，不重新抽取或强制消费。'); return;
+        }
+        this.runAbortCleanup?.(); this.runAbortCleanup = null;
         this.diagnosticRun = { id: this.diagnostics?.begin() || '', eligible: false, intercepted: false, observed: false, injected: false, consumed: false };
         this.trace('主 AI 生成开始', 'info', '收到酒馆的真实生成通知。', { generationType: type });
-        // quiet/impersonation never use our event, even if another extension initiates them.
         this.clear();
-        if (!ALLOWED.has(type)) { this.trace('生成类型', 'skip', '本次是静默、代写或其他不支持的生成类型，不安排随机事件。'); return; }
         this.busy = true;
         const ctx = this.context(), s = this.state(ctx);
         this.trace('当前连接', 'info', '记录当前主生成使用的 API 类型；地址与密钥不写入日志。', { mainApi: ctx?.mainApi });
         const last = ctx?.chat?.at(-1);
         const replayKey = REPLAY.has(type) && !last?.is_user ? last?.extra?.[KEY]?.cycleKey : null;
         this.run = s?.enabled ? { type, owner: s.owner, metadata: ctx.chatMetadata, replayKey, signal: options.signal,
-            stopped: false, cycleKey: null, injected: false, assistantCount: assistantTurns(ctx.chat) } : null;
+            stopped: false, cycleKey: null, injected: false, completed: false, overlapped: this.backgroundSeen,
+            requestStatus: 'unknown', initialProcessor: ctx.streamingProcessor, assistantCount: assistantTurns(ctx.chat) } : null;
         this.diagnosticRun.eligible = !!this.run;
+        const run = this.run;
+        if (run?.signal?.addEventListener) {
+            const aborted = () => { if (this.run === run) this.stop(true); };
+            run.signal.addEventListener('abort', aborted, { once: true });
+            this.runAbortCleanup = () => run.signal.removeEventListener('abort', aborted);
+            if (run.signal.aborted) aborted();
+        }
         if (!s?.enabled) this.trace('聊天检查', 'skip', '当前聊天没有开启随机事件导演，或尚未打开有效聊天。');
+    }
+    background(type) {
+        // Untyped endings cannot be paired with starts. Keep this caution across main turns:
+        // a late recall ending from a previous turn must not clear the next turn's injection.
+        this.backgroundSeen = true;
+        if (this.busy && this.run && !this.run.completed) { this.run.overlapped = true; this.captureProcessor(); }
+        this.trace('后台生成隔离', 'skip', '当前主回合以外的生成不抽取事件，也不清空主回合的注入和诊断状态。', { generationType: type }, undefined, '');
+    }
+    captureProcessor() {
+        const run = this.run, processor = this.context()?.streamingProcessor;
+        if (run && !run.ownershipUncertain && processor && processor !== run.initialProcessor && (processor.type ?? 'normal') === run.type) run.processor ||= processor;
+    }
+    requestChecked(check, final = false) {
+        const run = this.run;
+        if (!run || run.completed || run.stopped || (!final && run.requestFinal)) return;
+        if (final) { run.requestFinal = true; run.requestStatus = 'unknown'; }
+        if (!check.readable || (check.truncated && !check.found)) return;
+        if (final || run.requestStatus !== 'present') run.requestStatus = check.found || (!final && check.eventFound) ? 'present' : 'missing';
+        this.captureProcessor();
     }
     anchor(ctx) {
         const user = ctx.chat.findLast(m => m.is_user && !m.is_system);
@@ -248,10 +306,12 @@ export class Director {
         return message.extra[KEY].anchorId;
     }
     intercept(type = 'normal') {
+        if (!ALLOWED.has(type)) { this.background(type); return; }
+        if (this.run && type !== this.run.type) { this.background(type); return; }
+        if (this.run?.ownershipUncertain || this.run?.completed) { this.trace('并发保护', 'skip', '这个拦截器调用无法安全归属到待用主回合，不改写已有注入。'); return; }
         if (this.diagnosticRun) this.diagnosticRun.intercepted = true;
         this.trace('注入回调', 'info', '酒馆已调用本插件的生成拦截器。');
         this.clear();
-        if (!ALLOWED.has(type)) { this.trace('注入回调', 'skip', '此生成类型不使用随机事件。'); return; }
         const ctx = this.context(), s = this.state(ctx), run = this.run;
         if (!s?.enabled || !run || run.stopped || run.owner !== s.owner || run.metadata !== ctx.chatMetadata) {
             this.trace('注入条件', 'skip', '聊天未开启、未收到有效生成开始通知、生成已停止或聊天已切换。'); return;
@@ -308,16 +368,24 @@ export class Director {
     }
     receive(messageId, type) {
         const ctx = this.context(), s = this.state(ctx), run = this.run;
-        if (!s?.enabled || !run?.cycleKey || run.stopped || run.signal?.aborted || run.owner !== s.owner
-            || run.metadata !== ctx.chatMetadata || !ALLOWED.has(type || run.type)) {
+        if (!s?.enabled || !run || run.completed || run.stopped || run.signal?.aborted || run.owner !== s.owner
+            || run.metadata !== ctx.chatMetadata || !ALLOWED.has(type || run.type) || (type && type !== run.type)) {
             if (this.diagnosticRun?.eligible) this.trace('回复确认', 'skip', '收到回复通知，但没有有效事件回合、请求已停止或聊天已切换；不消费事件。'); return;
         }
-        const processor = ctx.streamingProcessor;
-        if (processor?.isStopped || processor?.abortController?.signal.aborted) { this.trace('回复确认', 'skip', '流式生成已停止或取消，不消费事件。'); return; }
+        this.captureProcessor();
+        const processor = run.processor || (!run.overlapped ? ctx.streamingProcessor : null);
+        if (processor?.isStopped || processor?.abortController?.signal.aborted) { this.trace('回复确认', 'skip', '流式生成已停止或取消，不消费事件。'); this.stop(true); return; }
         const m = ctx.chat[messageId];
         if (!m || m.is_user || m.is_system || !String(m.mes || '').trim() || !m.gen_finished) {
             this.trace('回复确认', 'skip', '消息不是完整的 AI 正文，或缺少酒馆的完成标记；暂不消费事件。'); return;
         }
+        run.completed = true;
+        if (run.ownershipUncertain || run.requestStatus === 'missing'
+            || (run.injected && (run.overlapped || run.requestFinal) && run.requestStatus !== 'present')) {
+            this.trace('事件保留', 'warn', '主回复已完成，但并发请求归属或事件进入请求的情况未确认；保留待用事件，不标记为已使用。');
+            this.clear(); this.busy = false; this.save(ctx, s); return;
+        }
+        if (!run.cycleKey) { this.clear(); this.busy = false; return; }
         const c = s.cycles[run.cycleKey];
         if (!c || (c.event && !run.injected)) { this.trace('回复确认', 'warn', '缺少本轮事件记录，或事件没有执行注入；不消费事件。'); return; }
         m.extra ||= {};
@@ -337,21 +405,37 @@ export class Director {
         }
         if (this.diagnosticRun) this.diagnosticRun.consumed = true;
         this.trace('主 AI 回复完成', 'success', c.event ? '收到完整回复，本轮事件已使用；这不代表模型一定遵循了事件。' : '收到完整回复，本轮没有事件。');
-        this.clear(); this.save(ctx, s);
+        this.clear(); if (run.overlapped) this.busy = false; this.save(ctx, s);
         // MESSAGE_RECEIVED may precede GENERATION_ENDED; defer and let the host finish.
         this.defer(() => { if (!this.busy && !this.disposed) void this.refill(); });
     }
-    end() {
+    end(type) {
+        if (type && !ALLOWED.has(type)) return;
+        if (type && this.run && type !== this.run.type) return;
+        this.captureProcessor();
+        if (!type && this.busy && this.run?.overlapped && !this.run.completed && !this.run.signal?.aborted
+            && !this.run.processor?.isFinished && !this.run.processor?.isStopped && !this.run.processor?.abortController?.signal.aborted) {
+            this.trace('并发结束通知', 'skip', '结束通知没有可确认的主请求归属，暂不清除主回合；等待正文完成、主请求取消或用户停止。'); return;
+        }
         if (this.diagnosticRun?.eligible && !this.diagnosticRun.intercepted) this.trace('注入回调', 'warn', '主生成已结束，却未收到本插件的拦截器回调；请检查扩展加载或酒馆兼容性。');
         if (this.diagnosticRun?.injected && !this.diagnosticRun.observed) this.trace('请求检测', 'warn', '事件已调用注入接口，但未收到可检测的请求组装通知；无法确认事件是否进入主 AI 请求。');
         this.trace('生成结束', 'info', this.diagnosticRun?.consumed ? '生成结束，事件处理已完成。' : '生成结束；没有确认到完整回复，已选事件不会在此步骤标记为已使用。');
         this.clear(); this.busy = false;
         this.defer(() => { if (!this.busy && !this.disposed) void this.refill(); });
     }
-    stop() { this.trace('生成停止', 'warn', '主生成被停止；清除当前注入，保留未成功使用的事件安排。'); if (this.run) this.run.stopped = true; this.clear(); this.busy = false; }
+    stop(force = false, type) {
+        if (type && (!ALLOWED.has(type) || (this.run && type !== this.run.type))) return;
+        this.captureProcessor();
+        if (!force && !type && this.busy && this.run?.overlapped && !this.run.signal?.aborted && !this.run.processor?.abortController?.signal.aborted && !this.run.processor?.isStopped) {
+            this.trace('并发停止通知', 'skip', '停止通知无法确认属于主请求，不停止当前主回合；主请求自己的取消信号和用户停止按钮仍有效。'); return;
+        }
+        this.trace('生成停止', 'warn', '主生成被停止；清除当前注入，保留未成功使用的事件安排。');
+        if (this.run) this.run.stopped = true; this.clear(); this.busy = false;
+    }
     switchChat() {
         this.trace('切换聊天', 'info', '切换聊天，取消旧请求并清除当前隐藏提示词。', {}, undefined, '');
         this.discussion?.cancel();
+        this.runAbortCleanup?.(); this.runAbortCleanup = null; this.backgroundSeen = false;
         this.cancelFill(); this.clear(); this.run = null; this.busy = false;
         this.changed();
         // No automatic API request merely from browsing between conversations.
@@ -397,8 +481,9 @@ export class Director {
         s.pendingEvent = { cycleKey: null, event, injection: hiddenPrompt(event, s.directorPreset, ctx) };
         this.trace('待用事件就绪', 'success', '普通事件已准备，等待下一次正常生成。', {}, s.owner, ''); this.save(ctx, s); return true;
     }
-    dispose() { this.disposed = true; this.discussion?.cancel(); this.cancelFill(); this.clear(); this.run = null; }
+    dispose() { this.disposed = true; this.runAbortCleanup?.(); this.runAbortCleanup = null; this.discussion?.cancel(); this.cancelFill(); this.clear(); this.run = null; }
 }
 import { activePreset, generatorText, injectionText, normalizePreset } from './presets.js';
 import { activeHeader, normalizeHeader, headerMessages } from './headers.js';
 import { discussionState } from './discussion-state.js';
+import { PERSONA_PREFERENCES_KEY } from './personas.js';

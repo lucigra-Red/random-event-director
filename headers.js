@@ -13,6 +13,7 @@ export function normalizeGeneration(raw = {}) {
     return result;
 }
 export function normalizeHeader(raw) {
+    if (raw?.nativePresetName !== undefined) return nativeHeaderReference(raw.nativePresetName);
     if (!raw || typeof raw !== 'object' || typeof raw.name !== 'string' || !raw.name.trim() || raw.name.length > 80
         || !Array.isArray(raw.messages) || !raw.messages.length || raw.messages.length > 80) throw new Error('头部预设需要名称和提示词内容');
     let size = 0;
@@ -26,6 +27,49 @@ export function normalizeHeader(raw) {
         generation: normalizeGeneration(raw.generation) };
 }
 export function activeHeader(raw) { try { return raw ? normalizeHeader(raw) : null; } catch { return null; } }
+export function nativeHeaderReference(name) {
+    if (typeof name !== 'string' || !name.trim() || name.length > 1000) throw new Error('请选择有效的酒馆预设');
+    return { id: `native:${name}`, name, nativePresetName: name, messages: [], generation: {} };
+}
+export function nativePreset(header, ctx) {
+    const name = header?.nativePresetName;
+    if (!name) return null;
+    const preset = ctx.getPresetManager?.('openai')?.getCompletionPresetByName?.(name);
+    if (!preset || typeof preset !== 'object') throw new Error(`酒馆预设不存在：${name}；请刷新列表并重新选择。`);
+    return preset;
+}
+function nativeMessages(raw, characterId) {
+    if (Array.isArray(raw.messages)) return raw.messages.filter(p => ROLES.has(p?.role) && typeof p.content === 'string' && p.content.trim())
+        .map(p => ({ role: p.role, content: p.content }));
+    const prompts = Array.isArray(raw.prompts) ? raw.prompts : [], orders = Array.isArray(raw.prompt_order) ? raw.prompt_order : [];
+    const ordered = orders.find(p => characterId != null && String(p.character_id) === String(characterId))
+        || orders.find(p => Number(p.character_id) === 100001) || orders.find(p => Number(p.character_id) === 100000) || orders[0];
+    const enabled = Array.isArray(ordered?.order)
+        ? ordered.order.filter(p => p.enabled !== false).map(p => prompts.find(q => q.identifier === p.identifier)).filter(Boolean)
+        : prompts.filter(p => p.enabled !== false);
+    return enabled.filter(p => !p.marker && typeof p.content === 'string' && p.content.trim())
+        .map(p => ({ role: ROLES.has(p.role) ? p.role : 'system', content: p.content }));
+}
+export function nativeSampling(preset = {}) {
+    const result = {}, aliases = { temperature: ['temperature'], top_p: ['top_p', 'top_p_openai'],
+        top_k: ['top_k', 'top_k_openai'], frequency_penalty: ['frequency_penalty', 'freq_pen_openai'],
+        presence_penalty: ['presence_penalty', 'pres_pen_openai'], max_tokens: ['max_tokens', 'openai_max_tokens'],
+        min_p: ['min_p', 'min_p_openai'], top_a: ['top_a', 'top_a_openai'],
+        repetition_penalty: ['repetition_penalty', 'repetition_penalty_openai'], seed: ['seed'] };
+    for (const [key, names] of Object.entries(aliases)) {
+        const value = names.map(name => preset[name]).find(value => typeof value === 'number' && Number.isFinite(value));
+        if (value !== undefined) result[key] = value;
+    }
+    if (typeof preset.reasoning_effort === 'string') result.reasoning_effort = preset.reasoning_effort;
+    if (typeof preset.verbosity === 'string') result.verbosity = preset.verbosity;
+    return result;
+}
+export function nativeGenerationPreset(preset) {
+    // A header preset supplies prompts and generation settings. The connection UI still owns the provider and credentials.
+    return Object.fromEntries(Object.entries(preset).filter(([key]) =>
+        !['chat_completion_source', 'model', 'reverse_proxy', 'api_server', 'custom_include_body', 'custom_exclude_body'].includes(key)
+        && !/(_model|_url|_endpoint|_region|_password|_key|_headers)$/.test(key)));
+}
 export function headerFromNative(raw, name = '导入的头部预设', characterId = null) {
     if (raw?.type === 'random-event-director-header') {
         if (raw.version !== 1) throw new Error('头部预设版本不支持');
@@ -46,8 +90,10 @@ export function headerFromNative(raw, name = '导入的头部预设', characterI
     return normalizeHeader({ name, messages, generation });
 }
 export function headerMessages(raw, ctx) {
-    return (activeHeader(raw)?.messages || []).map(m => ({ ...m,
-        content: m.content.replace(/\{\{\s*(char|user)\s*\}\}/g, (_, token) => String(token === 'char' ? ctx.name2 || '' : ctx.name1 || '')) }));
+    const active = activeHeader(raw);
+    const messages = active?.nativePresetName ? nativeMessages(nativePreset(active, ctx), ctx.characterId) : active?.messages || [];
+    return messages.map(m => ({ ...m, content: ctx.substituteParams ? ctx.substituteParams(m.content)
+        : m.content.replace(/\{\{\s*(char|user)\s*\}\}/g, (_, token) => String(token === 'char' ? ctx.name2 || '' : ctx.name1 || '')) }));
 }
 export class HeaderLibrary {
     constructor({ storage, persist = () => {}, makeId = () => globalThis.crypto.randomUUID() }) { Object.assign(this, { storage, persist, makeId }); }

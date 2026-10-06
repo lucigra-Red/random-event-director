@@ -270,6 +270,19 @@
 }
 
 /* Independent result window. Headers and the die support mouse and touch dragging. */
+#red_director_window .red-persona-chatbar { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 13px 0; }
+#red_director_window .red-persona-chatbar > small { color: var(--red-muted); font-size: .72em; }
+#red_director_window .red-persona-chatbar label { display: flex; align-items: center; gap: 7px; flex: none; color: var(--red-muted); font-size: .8em; }
+#red_director_window .red-persona-chatbar select { width: auto; max-width: 120px; padding: 4px 7px; min-height: 32px; color: var(--red-ink); border-color: #d4b07960; }
+#red_director_window .red-persona-settings { padding: 12px; margin-bottom: 12px; border: 1px solid var(--red-line); border-radius: 10px; }
+#red_director_window .red-persona-settings label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#red_director_window .red-persona-settings select { width: auto; min-width: 115px; }
+#red_director_window .red-persona-settings p { color: var(--red-muted); font-size: .8em; margin: 8px 0 0; }
+@media (max-width: 420px) {
+    #red_director_window .red-persona-chatbar { flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+    #red_director_window .red-persona-chatbar > small { flex: 1 1 100%; }
+    #red_director_window .red-persona-settings label { flex-wrap: wrap; }
+}
 #red_director_window .red-window-head, #red_director_event_window .red-mini-head,
 #red_director_dice_dock .red-floating-die { touch-action: none; user-select: none; cursor: grab; }
 #red_director_dice_dock .red-floating-die:active { cursor: grabbing; }
@@ -293,6 +306,10 @@
 #red_director_event_window summary { cursor: pointer; color: #e5bd7f; font-size: 12px; }
 #red_director_event_window [data-mini="notice"] { color: #f0cf97; font-size: 12px; }
 #red_director_event_window [data-mini="notice"]:empty { display: none; }
+#red_director_event_window .red-mini-failure-actions { display: flex; gap: 8px; margin-top: 12px; }
+#red_director_event_window .red-mini-failure-actions button { flex: 1; }
+#red_director_event_window [data-mini-action="retry"] { border-color: #b58e55; color: #f4debb; background: #423727; }
+#red_director_event_window button:disabled { opacity: .55; cursor: default; }
 #red_director_event_window footer { display: flex; flex: none; gap: 8px; padding: 8px 12px 12px; }
 #red_director_event_window footer button { flex: 1; }
 #red_director_window .red-pool-view { flex: 1; min-height: 0; overflow: auto; padding: 12px; overscroll-behavior: contain; }

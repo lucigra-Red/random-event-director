@@ -41,7 +41,7 @@ export function errorCategory(error) {
     return '发生异常；请结合当前阶段检查，原始错误内容不写入诊断日志';
 }
 export class Diagnostics {
-    constructor(context, { now = () => new Date(), limit = 300, version = '0.1.8' } = {}) {
+    constructor(context, { now = () => new Date(), limit = 300, version = '0.1.9' } = {}) {
         Object.assign(this, { context, now, limit, version });
         this.entries = []; this.scopes = new Map(); this.listeners = new Set(); this.enabled = true; this.sequence = 0; this.runs = 0;
     }

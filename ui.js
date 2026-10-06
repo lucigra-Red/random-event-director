@@ -4,7 +4,7 @@ export function mountUI(director, context, doc = document) {
     doc.querySelector('#random_event_director_panel')?.remove();
     const root = doc.createElement('details');
     root.id = 'random_event_director_panel'; root.className = 'red-panel';
-    root.innerHTML = `<summary>随机事件导演 <small>V0.1.8</small></summary>
+    root.innerHTML = `<summary>随机事件导演 <small>V0.1.9</small></summary>
       <div class="red-body">
       <p class="red-help">为当前聊天加入偶发情境。先配置副 AI，再开启随机事件。</p>
       <label><input type="checkbox" data-setting="enabled"> 开启本聊天的随机事件导演</label>
@@ -13,11 +13,13 @@ export function mountUI(director, context, doc = document) {
         <label>近期消息数量<input class="text_pole" type="number" min="1" max="40" data-setting="contextMessages"></label>
       </div>
       <details><summary>高级设置</summary><div class="red-grid">
+        <label><input type="checkbox" data-setting="outgoingInjection"> 增强事件注入</label>
         <label>事件池目标数量<input class="text_pole" type="number" min="1" max="20" data-setting="targetCount"></label>
         <label>自动补充阈值<input class="text_pole" type="number" min="0" max="19" data-setting="refillThreshold"></label>
         <label>事件池保留回合<input class="text_pole" type="number" min="1" max="50" data-setting="expiryTurns"></label>
         <label>副 AI 超时（秒）<input class="text_pole" type="number" min="5" max="180" data-setting="timeoutSeconds"></label>
       </div></details>
+      <p class="red-help">增强事件注入会在发送前整理或补回本轮事件，保留其他插件的内容。遇到特殊预设不兼容时可关闭。</p>
       <div data-role="connection-host"></div>
       <div data-role="current-model" class="red-body"><label><input type="checkbox" data-setting="useCurrentModel"> 沿用主 API 的当前模型</label>
       <p class="red-help">已使用主 API 的连接；取消勾选仅用于在同一 API 下指定其他模型。</p>
@@ -53,7 +55,7 @@ export function mountUI(director, context, doc = document) {
         field('count').textContent = s ? `当前可用事件池：${s.eventPool.length} / ${s.targetCount}${director.fill ? ' · 副 AI 生成中…' : ''}` : '请先打开一个聊天。';
         field('pending').textContent = s?.pendingEvent ? '随机事件已准备，将在对应的下一次正常生成时生效。' : '当前没有待用事件。';
         field('recent').textContent = `最近触发：${s?.recentEvent?.title || '暂无'}`;
-        field('status').textContent = s?.error || notice;
+        field('status').textContent = s?.error || notice || (s?.refillStopped && !director.fill && !director.discussion?.guideTask ? '事件生成已暂停；请使用生成按钮或骰子小窗中的“重试生成”。' : '');
         for (const button of root.querySelectorAll('[data-action]')) button.disabled = !s?.enabled || director.busy || Boolean(director.fill);
         const list = root.querySelector('#red-models'); list.replaceChildren();
         const models = new Set();

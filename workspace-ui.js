@@ -1,5 +1,6 @@
 import { mountDiagnosticsUI } from './diagnostics-ui.js';
 import { makeDraggable, placeWidget, visibleViewport } from './window-placement.js';
+import { PERSONAS, PERSONA_PREFERENCES_KEY, discussionPersona, normalizePersona } from './personas.js';
 
 const WORKSPACE_KEY = 'random_event_director_workspace_ui_v1';
 const WINDOW_SIZES = new Set(['small', 'medium', 'large']);
@@ -16,7 +17,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     window.innerHTML = `<header class="red-window-head"><div class="red-window-title"><span class="red-moon" aria-hidden="true">☾</span><div><strong>导演系统-初月</strong><small>先聊想法，再决定下一幕</small></div></div>
       <div class="red-window-tools"><div class="red-size-switch" role="group" aria-label="窗口大小"><button type="button" data-size="large" aria-label="大窗口" aria-pressed="false">大</button><button type="button" data-size="medium" aria-label="中窗口" aria-pressed="true">中</button><button type="button" data-size="small" aria-label="小窗口" aria-pressed="false">小</button></div><button type="button" data-window="maximize" aria-label="放大窗口" title="放大 / 还原">⛶</button><button type="button" data-window="close" aria-label="关闭导演窗口" title="关闭">×</button></div></header>
       <nav class="red-tabs" aria-label="导演系统页面"><button type="button" data-view="chat" aria-pressed="true">剧情讨论</button><button type="button" data-view="events" aria-pressed="false">随机事件</button><button type="button" data-view="pool" aria-pressed="false">事件池</button><button type="button" data-view="settings" aria-pressed="false">设置</button><button type="button" data-view="logs" aria-pressed="false">诊断日志</button></nav><div class="red-owner" data-window-role="owner"></div>
-      <div class="red-chat-view" data-page="chat"><div class="red-guide-status" data-window-role="guide-status"></div>
+      <div class="red-chat-view" data-page="chat"><div class="red-persona-chatbar"><small data-window-role="persona-hint"></small><label>聊天人设 <select data-window-role="persona" aria-label="小窗聊天人设"></select></label></div><div class="red-guide-status" data-window-role="guide-status"></div>
         <div class="red-transcript" data-window-role="messages" role="log" aria-label="导演讨论记录" aria-live="polite"></div>
         <div class="red-proposal" data-window-role="proposal" hidden><div class="red-summary-card"><strong><span aria-hidden="true">✧</span> 本次方向总结</strong><p data-window-role="summary"></p></div><div class="red-window-actions"><button type="button" data-window="accept">应用到下一次事件</button><button type="button" data-window="reject">不应用</button></div><small>也可以直接继续讨论，上一份未确认总结会自动作废。</small></div>
         <p class="red-window-notice" data-window-role="notice" role="status"></p>
@@ -36,18 +37,24 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     diceDock.innerHTML = `<button type="button" class="red-floating-die" aria-label="投掷十面骰，启用一个事件">${D10}</button><span class="red-dice-feedback" role="status" aria-live="polite"></span>`;
     const eventWindow = doc.createElement('section'); eventWindow.id = 'red_director_event_window'; eventWindow.hidden = true;
     eventWindow.setAttribute('role', 'dialog'); eventWindow.setAttribute('aria-label', '本轮随机事件');
-    eventWindow.innerHTML = `<header class="red-mini-head"><span>☾ <span data-mini="label">本轮随机事件</span></span><button type="button" data-mini-action="close" aria-label="关闭事件小窗">×</button></header><div class="red-mini-body"><h3 data-mini="title"></h3><p data-mini="hint"></p><details data-mini="reveal" hidden><summary>查看事件内容（可能剧透）</summary><p data-mini="content"></p></details><p data-mini="notice" role="status" aria-live="polite"></p></div><footer><button type="button" data-mini-action="pool">完整事件池</button><button type="button" data-mini-action="director">打开导演系统</button></footer>`;
+    eventWindow.innerHTML = `<header class="red-mini-head"><span>☾ <span data-mini="label">本轮随机事件</span></span><button type="button" data-mini-action="close" aria-label="关闭事件小窗">×</button></header><div class="red-mini-body"><h3 data-mini="title"></h3><p data-mini="hint"></p><details data-mini="reveal" hidden><summary>查看事件内容（可能剧透）</summary><p data-mini="content"></p></details><p data-mini="notice" role="status" aria-live="polite"></p><div class="red-mini-failure-actions" data-mini="failure-actions" hidden><button type="button" data-mini-action="retry">重试生成</button><button type="button" data-mini-action="logs">查看日志</button></div></div><footer><button type="button" data-mini-action="pool">完整事件池</button><button type="button" data-mini-action="director">打开导演系统</button></footer>`;
     doc.body.append(window, diceDock, eventWindow);
     const floatingDie = diceDock.querySelector('button'), diceFeedback = diceDock.querySelector('.red-dice-feedback');
     const entry = doc.createElement('div'); entry.id = 'red_director_entry'; entry.className = 'inline-drawer red-extension-entry';
-    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.8</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="events">随机事件</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
+    entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V0.1.9</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="events">随机事件</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
     settingsHost.append(entry); window.querySelector('[data-page="settings"]').append(settings); settings.open = true;
     const get = name => window.querySelector(`[data-window-role="${name}"]`);
+    const personaSettings = doc.createElement('div'); personaSettings.className = 'red-persona-settings';
+    personaSettings.innerHTML = '<label>新聊天默认人设<select data-window-role="default-persona" aria-label="新聊天默认人设"></select></label><p>只影响小窗聊天口吻。当前聊天在剧情讨论页右上角选择；修改默认值只用于尚未设置人设的新聊天。</p>';
+    window.querySelector('[data-page="settings"]').insertBefore(personaSettings, settings);
+    for (const select of [get('persona'), get('default-persona')]) for (const persona of PERSONAS) {
+        const option = doc.createElement('option'); option.value = persona.id; option.textContent = persona.name; select.append(option);
+    }
     const button = name => window.querySelector(`[data-window="${name}"]`);
     const input = window.querySelector('textarea[aria-label="导演讨论输入"]');
     const diagnosticsUI = mountDiagnosticsUI(window.querySelector('[data-page="logs"]'), director.diagnostics, doc);
     let page = 'chat', owner = null, notice = '', eventNotice = '', pendingId = null, transcriptKey = '', poolKey = '', lastFocus = null;
-    let disposed = false, eventTask = null, diceAnimating = false, diceTimer = null, animationUntil = 0;
+    let disposed = false, eventTask = null, diceAnimating = false, diceTimer = null, animationUntil = 0, shownFailureId = null;
     const mini = name => eventWindow.querySelector(`[data-mini="${name}"]`);
     function reflow() { for (const widget of [window, diceDock, eventWindow]) placeWidget(widget); }
     function setSize(size, persist = false) {
@@ -75,6 +82,9 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     }
     function showEvent() {
         const wasHidden = eventWindow.hidden; eventWindow.hidden = false; refresh();
+        positionEvent(wasHidden);
+    }
+    function positionEvent(wasHidden) {
         const rect = diceDock.getBoundingClientRect(), width = eventWindow.getBoundingClientRect().width, viewport = visibleViewport(doc.defaultView);
         const beside = rect.left - width - 8 >= viewport.left + 8;
         placeWidget(eventWindow, wasHidden ? { left: beside ? rect.left - width - 8 : viewport.left + 8,
@@ -99,23 +109,30 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     }
     function refresh() {
         const state = director.state(), disc = state?.discussion, currentOwner = state?.owner || null;
-        if (owner !== currentOwner) { owner = currentOwner; input.value = ''; notice = ''; eventNotice = ''; transcriptKey = ''; pendingId = null; get('event-reveal').open = false; eventWindow.hidden = true; mini('reveal').open = false; }
+        if (owner !== currentOwner) { owner = currentOwner; shownFailureId = null; input.value = ''; notice = ''; eventNotice = ''; transcriptKey = ''; pendingId = null; get('event-reveal').open = false; eventWindow.hidden = true; mini('reveal').open = false; }
         const ctx = context(); get('owner').textContent = state ? `${ctx.name2 || '当前角色'} · 当前聊天` : '未打开聊天';
-        const key = JSON.stringify([disc?.messages, Boolean(director.discussion?.chatTask)]);
+        const persona = discussionPersona(disc?.persona);
+        get('persona').value = persona.id; get('persona').disabled = !state || Boolean(director.discussion?.chatTask);
+        get('persona-hint').textContent = persona.description;
+        get('default-persona').value = normalizePersona(ctx.extensionSettings?.[PERSONA_PREFERENCES_KEY]?.defaultPersona);
+        get('default-persona').disabled = !ctx.extensionSettings;
+        input.placeholder = `说说你想要的方向，也可以让${persona.name}提建议…\nEnter 发送，Shift+Enter 换行`;
+        const key = JSON.stringify([disc?.messages, disc?.persona, Boolean(director.discussion?.chatTask)]);
         if (key !== transcriptKey) {
             transcriptKey = key; const log = get('messages'); log.replaceChildren();
             if (!disc?.messages.length) {
                 const intro = doc.createElement('div'); intro.className = 'red-chat-intro';
-                intro.innerHTML = `<span class="red-intro-moon" aria-hidden="true">☾</span><strong>一起想想故事的下一步</strong><p>描述你想要的氛围、变化或禁忌。没有想法时，初月也可以提出建议。</p><button type="button" data-starter="接下来可以发生什么？给我几个自然的方向。">接下来可以发生什么？</button><button type="button" data-starter="帮我梳理当前剧情，再建议一个适合的小变化。">帮我理一理当前剧情</button>`; log.append(intro);
+                intro.innerHTML = `<span class="red-intro-moon" aria-hidden="true">${persona.mark}</span><strong>和${persona.name}一起想想故事的下一步</strong><p>描述你想要的氛围、变化或禁忌。没有想法时，${persona.name}也可以提出建议。</p><button type="button" data-starter="接下来可以发生什么？给我几个自然的方向。">接下来可以发生什么？</button><button type="button" data-starter="帮我梳理当前剧情，再建议一个适合的小变化。">帮我理一理当前剧情</button>`; log.append(intro);
             }
             for (const message of disc?.messages || []) {
                 const bubble = doc.createElement('article'); bubble.className = `red-bubble red-${message.role}`;
                 const author = doc.createElement('small'), text = doc.createElement('p'), avatar = doc.createElement('span'), body = doc.createElement('div');
-                avatar.className = 'red-chat-avatar'; avatar.setAttribute('aria-hidden', 'true'); avatar.textContent = message.role === 'user' ? '你' : '☾'; body.className = 'red-bubble-body';
-                author.textContent = message.role === 'user' ? '你' : '初月'; text.textContent = message.content;
+                const speaker = message.persona ? discussionPersona(message.persona) : null;
+                avatar.className = 'red-chat-avatar'; avatar.setAttribute('aria-hidden', 'true'); avatar.textContent = message.role === 'user' ? '你' : speaker?.mark || '☾'; body.className = 'red-bubble-body';
+                author.textContent = message.role === 'user' ? '你' : speaker?.name || '初月'; text.textContent = message.content;
                 body.append(author, text); bubble.append(avatar, body); log.append(bubble);
             }
-            if (director.discussion?.chatTask) { const thinking = doc.createElement('p'); thinking.className = 'red-thinking'; thinking.textContent = '初月正在思考…'; log.append(thinking); }
+            if (director.discussion?.chatTask) { const thinking = doc.createElement('p'); thinking.className = 'red-thinking'; thinking.textContent = `${persona.name}正在思考…`; log.append(thinking); }
             log.scrollTop = log.scrollHeight;
         }
         const guideStatus = get('guide-status'); guideStatus.replaceChildren();
@@ -142,12 +159,15 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         get('event-probability').textContent = state ? `${state.triggerProbability}%` : '—';
         const actionRunning = Boolean(eventTask), rolling = diceAnimating || (eventTask?.owner === currentOwner && eventTask?.action === 'roll');
         const preparing = Boolean(director.fill || director.discussion?.guideTask);
+        const failure = state?.refillStopped ? state.generationFailure : null;
+        const failed = Boolean(failure && !preparing && !actionRunning);
         get('event-label').textContent = pending ? '已抽取 · 等待本轮生成' : (preparing || actionRunning ? '初月正在准备事件' : '下一次意外，尚未揭晓');
         get('event-title').textContent = pending?.title || (state ? '让故事多一点可能' : '请先打开一个聊天');
         get('event-hint').textContent = pending ? '事件已准备，将在对应的正常生成中生效；成功回复后结束本次注入。' : '保持自然的随机触发，或亲手掷骰，迎接一个小变化。';
         get('event-reveal').hidden = !pending; get('event-content').textContent = pending?.content || '';
         get('event-recent').textContent = state?.recentEvent?.title || '暂无';
-        get('event-notice').textContent = state?.error || eventNotice || (!state?.enabled && state ? '点击骰子即可开启本聊天并准备一个事件。' : '');
+        const stoppedNotice = state?.refillStopped && !preparing && !actionRunning ? '事件生成已暂停；请使用准备按钮或骰子小窗中的“重试生成”。' : '';
+        get('event-notice').textContent = state?.error || eventNotice || stoppedNotice || (!state?.enabled && state ? '点击骰子即可开启本聊天并准备一个事件。' : '');
         // The die always remains draggable and can reopen the current event, even while a request is busy.
         button('roll').disabled = false; floatingDie.disabled = false;
         button('prepare-pool').disabled = !state?.enabled || director.busy || preparing || actionRunning;
@@ -158,19 +178,27 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         floatingDie.title = diceTitle; button('roll').title = diceTitle;
         floatingDie.setAttribute('aria-busy', String(actionRunning || preparing)); button('roll').setAttribute('aria-busy', String(actionRunning || preparing));
         diceDock.hidden = false;
-        diceFeedback.textContent = pending ? '本轮已启用' : (eventTask?.owner === currentOwner ? '准备中…' : eventNotice);
-        mini('label').textContent = get('event-label').textContent;
-        mini('title').textContent = pending?.title || (preparing || actionRunning ? '正在准备事件…' : (state ? '本轮暂无事件' : '请先打开一个聊天'));
-        mini('hint').textContent = pending ? get('event-hint').textContent : (director.busy ? '主 AI 正在生成，请稍后再投掷。' : (preparing || actionRunning ? '准备完成后会在这里显示抽取结果。' : '点击骰子抽取事件，继续主聊天时生效。'));
-        mini('reveal').hidden = !pending; mini('content').textContent = pending?.content || '';
-        mini('notice').textContent = state?.error || eventNotice || '';
+        diceFeedback.textContent = failed ? '生成失败' : (preparing || actionRunning ? '准备中…' : (pending ? '本轮已启用' : eventNotice));
+        mini('label').textContent = failed ? '生成失败 · 已暂停' : get('event-label').textContent;
+        mini('title').textContent = failed ? '事件未生成成功' : (preparing || actionRunning ? '正在准备事件…' : (pending?.title || (state ? '本轮暂无事件' : '请先打开一个聊天')));
+        mini('hint').textContent = failed ? `原因：${failure.message}` : (preparing || actionRunning ? '准备完成后会在这里显示抽取结果。' : (pending ? get('event-hint').textContent : (director.busy ? '主 AI 正在生成，请稍后再投掷。' : '点击骰子抽取事件，继续主聊天时生效。')));
+        mini('reveal').hidden = !pending || failed || preparing || actionRunning; mini('content').textContent = pending?.content || '';
+        mini('notice').textContent = failed ? `已停止自动重试。${pending ? '原先已抽取的事件保留。' : ''}正常聊天可继续；要重新生成，请点击下方按钮。` : (preparing || actionRunning ? '' : (state?.error || eventNotice || stoppedNotice));
+        mini('failure-actions').hidden = !failure;
+        const retry = eventWindow.querySelector('[data-mini-action="retry"]');
+        retry.disabled = !state || director.busy || preparing || actionRunning;
+        retry.textContent = preparing || actionRunning ? '正在重试…' : '重试生成';
+        if (!failure) shownFailureId = null;
+        const showFailure = failed && shownFailureId !== failure.id;
+        if (showFailure) { shownFailureId = failure.id; eventWindow.hidden = false; }
         renderPool(state); reflow();
+        if (showFailure) positionEvent(true);
         if (page === 'logs') diagnosticsUI.refresh();
     }
     async function eventAction(action) {
-        if (action === 'roll') showEvent();
+        if (action === 'roll' || action === 'retry') showEvent();
         const state = director.state(), currentOwner = state?.owner;
-        if (!state || eventTask || director.busy || director.fill || director.discussion?.guideTask || (action === 'roll' && state.pendingEvent)) return;
+        if (!state || eventTask || director.busy || director.fill || director.discussion?.guideTask || (action === 'roll' && (state.pendingEvent || (state.refillStopped && state.generationFailure)))) return;
         const token = { action, owner: currentOwner }; eventTask = token;
         if (action === 'roll') {
             diceAnimating = true; animationUntil = Date.now() + 650;
@@ -179,11 +207,11 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         }
         try {
             eventNotice = action === 'roll' ? '正在投掷并准备事件…' : '正在更新事件池…';
-            const task = action === 'roll' ? director.rollNow({ enable: true }) : director.refill(true); refresh();
+            const task = action === 'retry' ? director.retryGeneration({ enable: true }) : (action === 'roll' ? director.rollNow({ enable: true }) : director.refill(true)); refresh();
             const done = await task;
             if (disposed || director.state()?.owner !== currentOwner) return;
             refresh();
-            eventNotice = done ? (action === 'roll' ? '本轮事件已启用，继续主聊天即可。' : '事件池已更新，等待故事的下一幕。') : '本次未启用新事件，请检查连接或稍后重试。';
+            eventNotice = done ? (action !== 'prepare-pool' ? '本轮事件已启用，继续主聊天即可。' : '事件池已更新，等待故事的下一幕。') : '本次未启用新事件，请检查连接或稍后重试。';
         } catch (e) { if (!disposed && director.state()?.owner === currentOwner) eventNotice = e.message; }
         finally { if (eventTask === token) eventTask = null; if (Date.now() >= animationUntil) diceAnimating = false; if (!disposed) refresh(); }
     }
@@ -225,7 +253,20 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     };
     const launch = event => { const target = event.target.closest('[data-launch]'); if (target) open(target.dataset.launch); };
     const throwDice = () => { void eventAction('roll'); };
-    const change = event => { if (event.target === get('enable-events')) { try { director.update({ enabled: event.target.checked }); } catch (e) { eventNotice = e.message; } refresh(); } };
+    const change = event => {
+        try {
+            if (event.target === get('enable-events')) director.update({ enabled: event.target.checked });
+            else if (event.target === get('persona')) { director.discussion.setPersona(event.target.value); notice = ''; }
+            else if (event.target === get('default-persona')) {
+                const ctx = context();
+                if (ctx.extensionSettings) {
+                    ctx.extensionSettings[PERSONA_PREFERENCES_KEY] = { defaultPersona: normalizePersona(event.target.value) };
+                    ctx.saveSettingsDebounced?.();
+                }
+            } else return;
+        } catch (e) { notice = e.message; }
+        refresh();
+    };
     const head = window.querySelector('header');
     const stopMainDrag = makeDraggable(window, head, { canDrag: () => !window.classList.contains('red-maximized') });
     const stopDiceDrag = makeDraggable(diceDock, floatingDie, { ignoreButtons: false });
@@ -233,6 +274,8 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     const miniClick = event => {
         const action = event.target.closest('[data-mini-action]')?.dataset.miniAction;
         if (action === 'close') eventWindow.hidden = true;
+        else if (action === 'retry') void eventAction('retry');
+        else if (action === 'logs') { eventWindow.hidden = true; open('logs'); }
         else if (action === 'pool' || action === 'director') { eventWindow.hidden = true; open(action === 'pool' ? 'pool' : 'events'); }
     };
     window.addEventListener('click', click); window.addEventListener('change', change); input.addEventListener('keydown', keydown); entry.addEventListener('click', launch);
