@@ -11,7 +11,7 @@ function texts(row) {
 
 // A pure, transactional transform. Match only our frozen full instruction, never another
 // extension's key, event title, generic tags or the Story Oracle guidance/protocol text.
-export function placeEventInMessages(messages, injection, { allowUser = true } = {}) {
+export function placeEventInMessages(messages, injection, { allowUser = true, mode = 'user' } = {}) {
     const unchanged = reason => ({ messages: null, changed: false, reason });
     if (!Array.isArray(messages) || messages.length > 2000 || typeof injection !== 'string' || !injection.trim()) return unchanged('unsupported');
     let characters = 0, count = 0, unsafe = false;
@@ -64,14 +64,18 @@ export function placeEventInMessages(messages, injection, { allowUser = true } =
         out.push(row);
     }
     let user = -1;
-    if (allowUser) for (let i = out.length - 1; i >= 0; i--) {
+    if (allowUser || mode === 'system') for (let i = out.length - 1; i >= 0; i--) {
         const row = out[i];
         if (row?.role !== 'user' || row.name?.startsWith('example_')) continue;
         if (typeof row.content !== 'string' && !Array.isArray(row.content)) continue;
         if (cueTail(texts(row).join('\n'))) continue;
         user = i; break;
     }
-    if (user < 0) {
+    if (mode === 'system') {
+        // Rebuild a plain row, without another plugin's disposable memory metadata.
+        // Keep the event off history floors, and leave prefills and tool-call tails intact.
+        out.splice(user < 0 ? 0 : user, 0, { role: 'system', content: injection });
+    } else if (user < 0) {
         // Continue/prefill or an unsupported player message: preserve an existing injection.
         if (count === 1) return unchanged('no-user');
         out.unshift({ role: 'system', content: injection });
@@ -83,5 +87,6 @@ export function placeEventInMessages(messages, injection, { allowUser = true } =
     // Verify exactly one full copy before replacing the outgoing request. No writes to chat history.
     const occurrences = out.flatMap(texts).reduce((sum, text) => sum + text.split(injection).length - 1, 0);
     if (occurrences !== 1) return unchanged('selfcheck');
-    return { messages: out, changed: true, reason: user < 0 ? 'system-repaired' : (count ? 'moved' : 'repaired'), count };
+    return { messages: out, changed: true, reason: mode === 'system' ? (count ? 'system-moved' : 'system-repaired')
+        : user < 0 ? 'system-repaired' : (count ? 'moved' : 'repaired'), count };
 }

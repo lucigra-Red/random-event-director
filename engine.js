@@ -1,7 +1,7 @@
 export const KEY = 'random_event_director_v1';
-export const DEFAULTS = Object.freeze({ enabled: false, triggerProbability: 25, targetCount: 6,
-    refillThreshold: 2, expiryTurns: 7, contextMessages: 16, contextChars: 24000, includeHiddenMessages: false,
-    timeoutSeconds: 45, useCurrentModel: true, outgoingInjection: true, model: '', worldNotes: '', directorPreset: null, headerPreset: Object.freeze(builtinHeaderReference()) });
+export const DEFAULTS = Object.freeze({ enabled: false, triggerProbability: 25, fixedRoundEnabled: false, fixedRoundInterval: 5, targetCount: 10,
+    refillThreshold: 2, expiryTurns: 10, majorEventTurns: 5, contextMessages: 16, contextChars: 24000, includeHiddenMessages: false, hideDice: false,
+    timeoutSeconds: 45, useCurrentModel: true, outgoingInjection: true, injectionMode: 'user', forceInjection: false, model: '', worldNotes: '', directorPreset: null, headerPreset: Object.freeze(builtinHeaderReference()) });
 const REPLAY = new Set(['regenerate', 'swipe', 'continue', 'append']);
 const ALLOWED = new Set(['normal', 'regenerate', 'swipe', 'continue', 'append']);
 const clamp = (value, fallback, min, max) => Number.isFinite(Number(value))
@@ -9,13 +9,18 @@ const clamp = (value, fallback, min, max) => Number.isFinite(Number(value))
 export function config(raw = {}) {
     return { enabled: raw.enabled === true,
         triggerProbability: clamp(raw.triggerProbability, 25, 0, 100),
-        targetCount: clamp(raw.targetCount, 6, 1, 20), refillThreshold: clamp(raw.refillThreshold, 2, 0, 19),
-        expiryTurns: clamp(raw.expiryTurns, 7, 1, 50), contextMessages: clamp(raw.contextMessages, 16, 1, 40),
+        fixedRoundEnabled: raw.fixedRoundEnabled === true,
+        fixedRoundInterval: clamp(raw.fixedRoundInterval, 5, 1, 100),
+        targetCount: clamp(raw.targetCount, 10, 1, 20), refillThreshold: clamp(raw.refillThreshold, 2, 0, 19),
+        expiryTurns: clamp(raw.expiryTurns, 10, 5, 10), majorEventTurns: clamp(raw.majorEventTurns, 5, 1, 20), contextMessages: clamp(raw.contextMessages, 16, 1, 40),
         contextChars: clamp(raw.contextChars, 24000, 1000, 60000),
         includeHiddenMessages: raw.includeHiddenMessages === true,
+        hideDice: raw.hideDice === true,
         timeoutSeconds: clamp(raw.timeoutSeconds, 45, 5, 180),
         useCurrentModel: raw.useCurrentModel !== false, model: String(raw.model || '').slice(0, 200),
         outgoingInjection: raw.outgoingInjection !== false,
+        injectionMode: ['user', 'system', 'force'].includes(raw.injectionMode) ? raw.injectionMode : 'user',
+        forceInjection: raw.injectionMode === 'force',
         worldNotes: String(raw.worldNotes || '').slice(0, 12000), directorPreset: activePreset(raw.directorPreset),
         headerPreset: raw.headerPreset === undefined ? builtinHeaderReference() : activeHeader(raw.headerPreset) };
 }
@@ -57,7 +62,7 @@ export function parseEvents(text, count, makeId = uuid) {
         if (!title || !content || title.length > 100 || content.length > 1200 || seen.has(content)) continue;
         seen.add(content);
         result.push({ id: makeId(), title, content, type: typeof row.type === 'string' ? row.type.slice(0, 40) : 'situation',
-            weight: clamp(row.weight, 10, 1, 100), status: 'available' });
+            weight: clamp(row.weight, 10, 1, 100), severity: row.severity === 'major' ? 'major' : 'ordinary', status: 'available' });
         if (result.length >= count) break;
     }
     if (!result.length) throw new Error('副 AI 没有返回有效的事件起因');
@@ -86,6 +91,7 @@ export function poolPrompt(ctx, state, count) {
     const card = ctx.characters?.[ctx.characterId] || {};
     const background = [card.description, card.personality, card.scenario, state.worldNotes].filter(Boolean).join('\n').slice(0, 12000);
     return [...headerMessages(state.headerPreset, ctx), { role: 'system', content: generatorText(state.directorPreset, count, ctx) },
+    ...(state.majorEvent ? [{ role: 'system', content: majorPoolInstruction(state.majorEvent) }] : []),
     { role: 'user', content: JSON.stringify({ background, recent_story: recent,
         avoid_repeating: [...state.eventPool, ...Object.values(state.cycles).map(c => c.event).filter(Boolean)]
             .slice(-30).map(e => e.content) }) }];
@@ -105,14 +111,20 @@ export class Director {
         let state = ctx.chatMetadata[KEY];
         if (!state || state.version !== 1 || state.owner !== owner) {
             state = { ...config({ ...ctx.extensionSettings?.[DEFAULT_SETTINGS_KEY], ...state }), version: 1, owner, eventPool: [], cycles: {}, pendingEvent: null,
-                recentEvent: null, eventPoolGenerationTurn: 0, refillAttempt: null, refillStopped: false, generationFailure: null, error: '' };
+                recentEvent: null, majorEvent: null, poolFocusId: '', fixedRoundProgress: 0, eventPoolGenerationTurn: 0, poolGenerated: false, refillAttempt: null, refillStopped: false, generationFailure: null, error: '' };
             ctx.chatMetadata[KEY] = state;
         }
         if (!Array.isArray(state.eventPool) || !state.cycles || typeof state.cycles !== 'object' || Array.isArray(state.cycles)) {
             throw new Error('聊天中的随机事件状态损坏；请关闭插件并重置状态');
         }
         Object.assign(state, config(state));
+        state.fixedRoundProgress = clamp(state.fixedRoundProgress, 0, 0, state.fixedRoundInterval - 1);
         state.refillStopped = state.refillStopped === true;
+        if (!state.majorEvent?.event?.content || !state.majorEvent.id || !(state.majorEvent.remaining > 0)) state.majorEvent = null;
+        state.poolFocusId ||= '';
+        // Preserve an exhausted batch's lifetime across reloads; migrate older saved batches.
+        state.poolGenerated = state.poolGenerated === true || state.eventPool.length > 0 || state.poolRefreshTurns != null
+            || (state.poolGenerated === undefined && Boolean(state.refillAttempt));
         discussionState(state, ctx.extensionSettings?.[PERSONA_PREFERENCES_KEY]?.defaultPersona);
         return state;
     }
@@ -159,12 +171,70 @@ export class Director {
     update(values) {
         const ctx = this.context(), s = this.state(ctx);
         if (!s) { this.saveDefaults(values, ctx); return; }
-        Object.assign(s, config({ ...s, ...values }));
+        const next = config({ ...s, ...values });
+        const modeChanged = next.injectionMode !== s.injectionMode || next.forceInjection !== s.forceInjection;
+        if (modeChanged && this.busy) throw new Error('请等待当前生成结束后再切换事件注入方式');
+        if (modeChanged) this.clear();
+        if (next.fixedRoundEnabled !== s.fixedRoundEnabled || next.fixedRoundInterval !== s.fixedRoundInterval) s.fixedRoundProgress = 0;
+        Object.assign(s, next);
         if (!s.enabled) { this.runAbortCleanup?.(); this.runAbortCleanup = null; this.cancelFill(); this.clear(); this.run = null; this.busy = false; }
         this.save(ctx, s);
         if (s.enabled && !this.busy) void this.refill();
     }
     cancelFill() { this.epoch++; this.fill?.controller.abort(); this.fill = null; }
+    poolExpired(ctx, s) {
+        // Existing batches migrate conservatively: never exceed the configured upper bound.
+        const interval = clamp(s.poolRefreshTurns, s.expiryTurns, 5, s.expiryTurns);
+        return assistantTurns(ctx.chat) - s.eventPoolGenerationTurn >= interval;
+    }
+    eventInjection(event, s, ctx) {
+        const ordinary = event?.majorContinuation ? '' : hiddenPrompt(event, s.directorPreset, ctx);
+        return [ordinary, majorInjection(s.majorEvent)].filter(Boolean).join('\n\n');
+    }
+    beginMajor(ctx, s, event) {
+        if (s.majorEvent || event?.severity !== 'major') return false;
+        this.cancelFill();
+        s.majorEvent = { id: event.id, event: { ...event }, duration: s.majorEventTurns, remaining: s.majorEventTurns, started: false,
+            previousPool: { events: s.eventPool.slice(), generated: s.poolGenerated, turn: s.eventPoolGenerationTurn,
+                interval: s.poolRefreshTurns, focusId: s.poolFocusId, guideId: s.discussion.guide?.id,
+                guided: s.discussion.guide?.pool.slice() } };
+        if (s.discussion.guide) s.discussion.guide.pool = [];
+        this.discussion?.guideTask?.controller.abort();
+        if (this.discussion) this.discussion.guideTask = null;
+        s.eventPool = []; s.poolGenerated = false; s.refillAttempt = null; s.refillStopped = false; s.generationFailure = null;
+        this.trace('重大事件开始', 'success', '已抽取重大事件，切换为相关事件池；成功正文回复后计时。', { duration: s.majorEventTurns });
+        return true;
+    }
+    clearMajor(ctx, s, { restore = false, reason = '手动结束' } = {}) {
+        const major = s.majorEvent;
+        if (!major) return false;
+        this.cancelFill(); s.majorEvent = null;
+        this.discussion?.guideTask?.controller.abort();
+        if (this.discussion) this.discussion.guideTask = null;
+        if (s.discussion.guide?.majorId === major.id) { s.discussion.guide.pool = []; s.discussion.guide.majorId = null; }
+        if (s.pendingEvent?.majorId === major.id || s.pendingEvent?.event.id === major.id) {
+            s.pendingEvent.event.status = 'discarded'; s.pendingEvent = null;
+        }
+        // Once ended, a replay must not resurrect the former ongoing direction.
+        for (const cycle of Object.values(s.cycles)) if (cycle.majorId === major.id) {
+            cycle.event = null; cycle.injection = ''; cycle.majorId = null; cycle.guideId = null;
+        }
+        const old = restore && major.previousPool;
+        if (old?.guideId && s.discussion.guide?.id === old.guideId) s.discussion.guide.pool = (old.guided || []).filter(event => event.id !== major.id);
+        s.eventPool = old?.events || []; s.poolGenerated = old ? old.generated : false;
+        s.eventPoolGenerationTurn = old?.turn ?? assistantTurns(ctx.chat);
+        s.poolRefreshTurns = old?.interval; s.poolFocusId = old?.focusId || '';
+        s.refillAttempt = null; s.refillStopped = false; s.generationFailure = null; s.error = '';
+        this.clear(); this.trace('重大事件结束', 'info', `${reason}；已停止持续引导，恢复普通事件池。`);
+        this.save(ctx, s); return true;
+    }
+    async endMajor() {
+        const ctx = this.context(), s = this.state(ctx);
+        if (!s?.majorEvent || this.disposed || this.busy) return false;
+        this.clearMajor(ctx, s);
+        if (s.enabled) await this.refill(true);
+        return true;
+    }
     applyHeader(raw) {
         if (this.busy) throw new Error('请等待主生成结束后再应用头部预设');
         const next = raw ? normalizeHeader(raw) : null, ctx = this.context(), s = this.state(ctx);
@@ -216,9 +286,15 @@ export class Director {
             this.trace('事件池生成', 'skip', '上次事件生成失败，已停止自动生成，等待用户手动重试。', {}, s.owner, ''); return false;
         }
         const turn = assistantTurns(ctx.chat);
-        if (s.eventPool.length && turn - s.eventPoolGenerationTurn >= s.expiryTurns) s.eventPool = [];
-        if (!replace && s.eventPool.length > Math.min(s.refillThreshold, s.targetCount - 1)) return false;
-        if (!replace && s.refillAttempt && (this.now() - s.refillAttempt.time < 30000 || turn < s.refillAttempt.turn + 2)) return false;
+        const expired = this.poolExpired(ctx, s), focusId = s.majorEvent?.id || '';
+        const focusChanged = s.poolFocusId !== focusId;
+        if (!replace && s.poolGenerated && !expired && !focusChanged) return false;
+        if (focusChanged) s.eventPool = [];
+        if (expired && s.eventPool.length) {
+            this.trace('事件池到期', 'info', '事件池已到更新回合，更新整池候选；已经抽取的待用事件保留。', { poolCount: s.eventPool.length }, s.owner, '');
+            s.eventPool = [];
+        }
+        if (!replace && !expired && !focusChanged && s.refillAttempt && (this.now() - s.refillAttempt.time < 30000 || turn < s.refillAttempt.turn + 2)) return false;
         const needed = replace ? s.targetCount : s.targetCount - s.eventPool.length;
         if (needed <= 0) return false;
         const controller = new AbortController(), epoch = this.epoch;
@@ -238,13 +314,19 @@ export class Director {
                 this.trace('事件池生成', 'skip', '请求已取消或聊天、配置已变化，丢弃这次返回。', {}, s.owner, ''); return false;
             }
             const events = parseEvents(response, needed, this.makeId);
+            if (s.majorEvent) for (const event of events) event.severity = 'ordinary';
             const excluded = new Set([...(replace ? [] : s.eventPool), s.pendingEvent?.event,
                 ...Object.values(s.cycles).map(c => c.event)].filter(Boolean).map(e => e.content));
             const accepted = events.filter(e => !excluded.has(e.content));
             if (!accepted.length) throw new Error('副 AI 返回的事件全部重复');
             // A top-up keeps the original batch age; replacing/empty pool starts a new age.
-            if (replace || !s.eventPool.length) s.eventPoolGenerationTurn = turn;
+            if (replace || !s.eventPool.length) {
+                s.eventPoolGenerationTurn = assistantTurns(ctx.chat);
+                s.poolRefreshTurns = 5 + this.rng(s.expiryTurns - 4);
+            }
             s.eventPool = [...(replace ? [] : s.eventPool), ...accepted].slice(0, s.targetCount);
+            s.poolGenerated = true;
+            s.poolFocusId = focusId;
             s.refillStopped = false; s.generationFailure = null;
             this.trace('事件池就绪', 'success', '候选事件已保存；准备好事件池不等于已经注入主 AI。', { count: accepted.length, poolCount: s.eventPool.length }, s.owner, '');
             this.save(ctx, s);
@@ -268,7 +350,9 @@ export class Director {
         if (!ALLOWED.has(type)) { this.background(type); return; }
         if (this.busy && this.run && this.run.metadata === this.context().chatMetadata && !this.run.completed && !this.run.stopped && !this.run.signal?.aborted) {
             this.run.overlapped = true; this.run.ownershipUncertain = true;
-            this.trace('并发保护', 'warn', '已有主回合时又收到正文生成开始；无法区分两次请求，保留事件，不重新抽取或强制消费。'); return;
+            this.trace('并发保护', 'warn', this.state()?.forceInjection
+                ? '已有主回合时再次收到正文开始通知；强制模式继续注入同一事件，实际请求次数请结合传输日志判断。'
+                : '已有主回合时又收到正文生成开始；无法区分两次请求，保留事件，不重新抽取或强制消费。'); return;
         }
         this.runAbortCleanup?.(); this.runAbortCleanup = null;
         this.diagnosticRun = { id: this.diagnostics?.begin() || '', eligible: false, intercepted: false, observed: false, injected: false, consumed: false };
@@ -281,7 +365,7 @@ export class Director {
         const replayKey = REPLAY.has(type) && !last?.is_user ? last?.extra?.[KEY]?.cycleKey : null;
         this.run = s?.enabled ? { type, owner: s.owner, metadata: ctx.chatMetadata, replayKey, signal: options.signal,
             stopped: false, cycleKey: null, injected: false, completed: false, overlapped: this.backgroundSeen,
-            requestStatus: 'unknown', initialProcessor: ctx.streamingProcessor, assistantCount: assistantTurns(ctx.chat) } : null;
+            requestStatus: 'unknown', transportPending: 0, transportSucceeded: false, initialProcessor: ctx.streamingProcessor, assistantCount: assistantTurns(ctx.chat) } : null;
         this.diagnosticRun.eligible = !!this.run;
         const run = this.run;
         if (run?.signal?.addEventListener) {
@@ -308,6 +392,7 @@ export class Director {
         if (!run || run.completed || run.stopped || (!final && run.requestFinal)) return;
         if (final) { run.requestFinal = true; run.requestStatus = 'unknown'; }
         if (!check.readable || (check.truncated && !check.found)) return;
+        if (this.diagnosticRun) this.diagnosticRun.observed = true;
         if (final || run.requestStatus !== 'present') run.requestStatus = check.found || (!final && check.eventFound) ? 'present' : 'missing';
         this.captureProcessor();
     }
@@ -321,9 +406,12 @@ export class Director {
         return message.extra[KEY].anchorId;
     }
     intercept(type = 'normal') {
-        if (!ALLOWED.has(type)) { this.background(type); return; }
-        if (this.run && type !== this.run.type) { this.background(type); return; }
-        if (this.run?.ownershipUncertain || this.run?.completed) { this.trace('并发保护', 'skip', '这个拦截器调用无法安全归属到待用主回合，不改写已有注入。'); return; }
+        const forced = this.state()?.forceInjection === true;
+        if (!ALLOWED.has(type) || (this.run && type !== this.run.type)) {
+            if (!forced) { this.background(type); return; }
+            type = this.run?.type || 'normal';
+        }
+        if ((!forced && this.run?.ownershipUncertain) || this.run?.completed) { this.trace('并发保护', 'skip', '这个拦截器调用无法安全归属到待用主回合，不改写已有注入。'); return; }
         if (this.diagnosticRun) this.diagnosticRun.intercepted = true;
         this.trace('注入回调', 'info', '酒馆已调用本插件的生成拦截器。');
         this.clear();
@@ -331,17 +419,17 @@ export class Director {
         if (!s?.enabled || !run || run.stopped || run.owner !== s.owner || run.metadata !== ctx.chatMetadata) {
             this.trace('注入条件', 'skip', '聊天未开启、未收到有效生成开始通知、生成已停止或聊天已切换。'); return;
         }
-        if (ctx.groupId != null && REPLAY.has(type) && !run.replayKey && !s.pendingEvent?.cycleKey) {
+        if (ctx.groupId != null && REPLAY.has(type) && !run.replayKey && !s.pendingEvent?.cycleKey && !(forced && s.pendingEvent)) {
             this.trace('注入条件', 'skip', '群聊重生成没有可重放的事件记录。'); return;
         }
         const key = run.replayKey || this.anchor(ctx);
         let cycle = s.cycles[key];
         // Don't invent new random conditions when regenerating pre-installation messages.
-        if (!cycle && REPLAY.has(type) && !s.pendingEvent?.cycleKey) {
+        if (!cycle && REPLAY.has(type) && !s.pendingEvent?.cycleKey && !(forced && s.pendingEvent)) {
             this.trace('注入条件', 'skip', '重生成或续写的原消息没有事件记录，不新抽事件。'); return;
         }
         if (!cycle) {
-            if (assistantTurns(ctx.chat) - s.eventPoolGenerationTurn >= s.expiryTurns) {
+            if (this.poolExpired(ctx, s)) {
                 if (s.eventPool.length) this.trace('事件池过期', 'info', '普通候选事件池已到保留回合，清空旧候选。'); s.eventPool = [];
             }
             let event = null, guideId = null;
@@ -350,9 +438,13 @@ export class Director {
                 event = s.pendingEvent.event; guideId = s.pendingEvent.guideId || null;
                 this.trace('事件选择', 'success', '使用“立即掷骰”提前选好的待用事件。');
             } else {
-                const roll = this.rng(10000);
-                this.trace('随机判定', roll < s.triggerProbability * 100 ? 'success' : 'skip', roll < s.triggerProbability * 100 ? '本轮抽中随机事件，继续选择候选。' : '本轮没有抽中随机事件，这是正常的概率结果。', { roll, probability: s.triggerProbability });
-                if (roll < s.triggerProbability * 100) {
+                const roll = s.fixedRoundEnabled ? null : this.rng(10000);
+                const triggered = s.fixedRoundEnabled ? s.fixedRoundProgress + 1 >= s.fixedRoundInterval : roll < s.triggerProbability * 100;
+                this.trace(s.fixedRoundEnabled ? '固定回合判定' : '随机判定', triggered ? 'success' : 'skip', s.fixedRoundEnabled
+                    ? (triggered ? '已到固定触发回合，随机选择一个候选事件。' : '尚未到固定触发回合，本轮不自动抽取。')
+                    : (triggered ? '本轮抽中随机事件，继续选择候选。' : '本轮没有抽中随机事件，这是正常的概率结果。'),
+                    s.fixedRoundEnabled ? { interval: s.fixedRoundInterval, roundProgress: s.fixedRoundProgress } : { roll, probability: s.triggerProbability });
+                if (triggered) {
                     const guide = s.discussion.guide;
                     if (guide) {
                         event = choose(guide.pool, this.rng); guideId = event ? guide.id : null;
@@ -365,14 +457,28 @@ export class Director {
             if (event) {
                 event.status = 'pending';
                 s.eventPool = s.eventPool.filter(e => e.id !== event.id);
-                s.pendingEvent = { cycleKey: key, event, guideId };
+                this.beginMajor(ctx, s, event);
+                s.pendingEvent = { cycleKey: key, event, guideId, majorId: s.majorEvent?.id || null };
             }
-            const injection = event ? (pendingInjection || hiddenPrompt(event, s.directorPreset, ctx)) : '';
-            if (event) s.pendingEvent.injection = injection;
+            if (!event && s.majorEvent) event = majorTurnEvent(s.majorEvent);
+            const injection = event ? (s.majorEvent ? this.eventInjection(event, s, ctx) : pendingInjection || hiddenPrompt(event, s.directorPreset, ctx)) : '';
+            if (s.pendingEvent && event) s.pendingEvent.injection = injection;
             if (event) this.trace('事件绑定', 'success', '已选定一个事件并生成本轮隐藏提示词。', { characters: injection.length });
-            cycle = s.cycles[key] = { event, injection, guideId, status: 'pending', createdAt: this.now() };
+            cycle = s.cycles[key] = { event, injection, guideId, status: 'pending', createdAt: this.now(),
+                majorId: s.majorEvent?.id || null,
+                fixedRound: s.fixedRoundEnabled, fixedInterval: s.fixedRoundInterval };
             this.save(ctx, s);
-        } else this.trace('事件重放', 'info', '沿用这个回合原有的事件安排，不重新抽取。');
+        } else {
+            // An empty reroll can remove the side event from a stopped turn.
+            // Keep the ongoing major direction when that same pending turn resumes.
+            if (cycle.status === 'pending' && !cycle.event && s.majorEvent) {
+                cycle.event = majorTurnEvent(s.majorEvent);
+                cycle.injection = this.eventInjection(cycle.event, s, ctx);
+                cycle.majorId = s.majorEvent.id;
+                this.save(ctx, s);
+            }
+            this.trace('事件重放', 'info', '沿用这个回合原有的事件安排，不重新抽取。');
+        }
         run.cycleKey = key;
         if (cycle.status === 'consumed' && !REPLAY.has(type)) { this.trace('注入条件', 'skip', '此回合事件已经使用，正常生成不重复注入。'); return; }
         if (cycle.event) {
@@ -381,10 +487,44 @@ export class Director {
             if (this.diagnosticRun) this.diagnosticRun.injected = true;
         } else this.trace('注入结果', 'skip', '本轮没有安排事件，不添加隐藏提示词。');
     }
+    forcedEvent() {
+        const ctx = this.context(), s = this.state(ctx);
+        if (!s) return null;
+        const run = this.run;
+        const live = run && !run.stopped && !run.completed && !run.signal?.aborted
+            && run.owner === s.owner && run.metadata === ctx.chatMetadata;
+        const cycle = live ? s.cycles[run.cycleKey] : null;
+        const current = cycle?.event && (cycle.status !== 'consumed' || REPLAY.has(run.type)) ? cycle : s.pendingEvent
+            || (s.majorEvent ? { event: majorTurnEvent(s.majorEvent), injection: majorInjection(s.majorEvent) } : null);
+        return { owner: s.owner, metadata: ctx.chatMetadata, enabled: s.enabled, run: live ? run : null,
+            forced: s.forceInjection, injection: current?.event ? (current.injection || hiddenPrompt(current.event, s.directorPreset, ctx)) : '',
+            event: current?.event || null };
+    }
+    transport(event, phase, details) {
+        const ctx = this.context(), run = event?.run, s = this.state(ctx);
+        if (!s?.forceInjection || !run || this.run !== run || run.completed || run.stopped
+            || event.metadata !== ctx.chatMetadata || event.owner !== s.owner
+            || details.requestRole !== 'foreground' || !details.eventPresent) return;
+        if (phase === 'start') {
+            run.transportObserved = true; run.transportPending++;
+            run.injected = true; run.requestStatus = 'present';
+            if (this.diagnosticRun) { this.diagnosticRun.injected = true; this.diagnosticRun.observed = true; }
+        } else {
+            run.transportPending = Math.max(0, run.transportPending - 1);
+            if (phase === 'complete') run.transportSucceeded = true;
+            if (run.deferredReply && run.transportSucceeded) {
+                const reply = run.deferredReply; run.deferredReply = null;
+                // Host may emit MESSAGE_RECEIVED before the transport reader finishes.
+                this.receive(reply.id, reply.type);
+            } else if (!run.transportPending && run.ended) {
+                this.busy = false; this.changed();
+            }
+        }
+    }
     receive(messageId, type) {
         const ctx = this.context(), s = this.state(ctx), run = this.run;
         if (!s?.enabled || !run || run.completed || run.stopped || run.signal?.aborted || run.owner !== s.owner
-            || run.metadata !== ctx.chatMetadata || !ALLOWED.has(type || run.type) || (type && type !== run.type)) {
+            || run.metadata !== ctx.chatMetadata || !ALLOWED.has(type || run.type) || (!s.forceInjection && type && type !== run.type)) {
             if (this.diagnosticRun?.eligible) this.trace('回复确认', 'skip', '收到回复通知，但没有有效事件回合、请求已停止或聊天已切换；不消费事件。'); return;
         }
         this.captureProcessor();
@@ -394,8 +534,13 @@ export class Director {
         if (!m || m.is_user || m.is_system || !String(m.mes || '').trim() || !m.gen_finished) {
             this.trace('回复确认', 'skip', '消息不是完整的 AI 正文，或缺少酒馆的完成标记；暂不消费事件。'); return;
         }
+        if (s.forceInjection && run.injected && (!run.transportObserved || !run.transportSucceeded)) {
+            run.deferredReply = { id: messageId, type };
+            this.trace('事件保留', 'warn', '收到正文完成通知，但实际含事件请求尚未确认完整返回；保留事件，等待传输完成，不提前消费。', { activeRequests: run.transportPending });
+            return;
+        }
         run.completed = true;
-        if (run.ownershipUncertain || run.requestStatus === 'missing'
+        if ((!s.forceInjection && run.ownershipUncertain) || run.requestStatus === 'missing'
             || (run.injected && (run.overlapped || run.requestFinal) && run.requestStatus !== 'present')) {
             this.trace('事件保留', 'warn', '主回复已完成，但并发请求归属或事件进入请求的情况未确认；保留待用事件，不标记为已使用。');
             this.clear(); this.busy = false; this.save(ctx, s); return;
@@ -411,16 +556,25 @@ export class Director {
         }
         if (c.status !== 'consumed') {
             c.status = 'consumed';
-            if (c.event) { c.event.status = 'consumed'; s.recentEvent = { ...c.event }; }
+            if (c.fixedRound && s.fixedRoundEnabled && c.fixedInterval === s.fixedRoundInterval) {
+                s.fixedRoundProgress = (s.fixedRoundProgress + 1) % s.fixedRoundInterval;
+            }
+            if (c.event) { c.event.status = 'consumed'; if (!c.event.majorContinuation) s.recentEvent = { ...c.event }; }
             if (c.guideId && s.discussion.guide?.id === c.guideId) {
                 s.discussion.lastUsed = '已使用'; s.discussion.guide = null;
                 this.discussion?.guideTask?.controller.abort();
             }
             if (s.pendingEvent?.cycleKey === run.cycleKey) s.pendingEvent = null;
+            if (c.majorId && s.majorEvent?.id === c.majorId) {
+                s.majorEvent.started = true; delete s.majorEvent.previousPool;
+                s.majorEvent.remaining--;
+                if (!s.majorEvent.remaining) this.clearMajor(ctx, s, { reason: '持续回合已到期' });
+                else this.trace('重大事件计时', 'info', '确认新的成功正文回合，重大事件剩余回合减一。', { remaining: s.majorEvent.remaining });
+            }
         }
         if (this.diagnosticRun) this.diagnosticRun.consumed = true;
         this.trace('主 AI 回复完成', 'success', c.event ? '收到完整回复，本轮事件已使用；这不代表模型一定遵循了事件。' : '收到完整回复，本轮没有事件。');
-        this.clear(); if (run.overlapped) this.busy = false; this.save(ctx, s);
+        this.clear(); if (run.overlapped || run.ended) this.busy = false; this.save(ctx, s);
         // MESSAGE_RECEIVED may precede GENERATION_ENDED; defer and let the host finish.
         this.defer(() => { if (!this.busy && !this.disposed) void this.refill(); });
     }
@@ -428,6 +582,12 @@ export class Director {
         if (type && !ALLOWED.has(type)) return;
         if (type && this.run && type !== this.run.type) return;
         this.captureProcessor();
+        if (this.state()?.forceInjection && this.run && !this.run.completed && !this.run.stopped) {
+            this.run.ended = true;
+            this.trace('生成结束通知', 'info', '结束通知不替代实际请求完成；待用事件继续保留。', { activeRequests: this.run.transportPending });
+            if (!this.run.transportPending) { this.busy = false; this.changed(); }
+            return;
+        }
         if (!type && this.busy && this.run?.overlapped && !this.run.completed && !this.run.signal?.aborted
             && !this.run.processor?.isFinished && !this.run.processor?.isStopped && !this.run.processor?.abortController?.signal.aborted) {
             this.trace('并发结束通知', 'skip', '结束通知没有可确认的主请求归属，暂不清除主回合；等待正文完成、主请求取消或用户停止。'); return;
@@ -458,21 +618,61 @@ export class Director {
     invalidate(reason, messageId) {
         const ctx = this.context(), s = this.state(ctx);
         if (!s?.enabled) return;
+        this.trace('聊天内容变化', 'info', '收到楼层变化通知；刷新候选池，保留已手动选定的待用事件和进行中的回合。', { notificationType: reason });
         // Regenerate deletes the prior assistant before its interceptor. Keep the bound decision.
         if (reason === 'delete' && this.run && REPLAY.has(this.run.type) && this.run.metadata === ctx.chatMetadata) return;
         this.cancelFill(); s.eventPool = []; s.refillAttempt = null;
-        if (reason === 'edit' && ctx.chat[messageId]?.is_user) {
+        const activeKey = this.run?.metadata === ctx.chatMetadata && !this.run.completed && !this.run.stopped ? this.run.cycleKey : null;
+        if (reason === 'edit' && ctx.chat[messageId]?.is_user && !activeKey) {
             const marker = ctx.chat[messageId].extra?.[KEY];
             if (marker?.anchorId) { delete s.cycles[marker.anchorId]; delete marker.anchorId; }
-            s.pendingEvent = null;
+            if (s.pendingEvent?.cycleKey) s.pendingEvent = null;
         }
         const live = new Set(ctx.chat.flatMap(m => [m.extra?.[KEY]?.anchorId, m.extra?.[KEY]?.cycleKey]).filter(Boolean));
-        for (const key of Object.keys(s.cycles)) if (!live.has(key) && key !== 'empty-chat') delete s.cycles[key];
+        for (const key of Object.keys(s.cycles)) if (!live.has(key) && key !== 'empty-chat' && key !== activeKey && key !== s.pendingEvent?.cycleKey) delete s.cycles[key];
         if (s.pendingEvent?.cycleKey && !s.cycles[s.pendingEvent.cycleKey]) s.pendingEvent = null;
-        if (s.pendingEvent && !s.pendingEvent.cycleKey) s.pendingEvent = null;
-        this.clear(); this.save(ctx, s);
+        if (!activeKey) this.clear(); this.save(ctx, s);
     }
-    async rollNow({ enable = false } = {}) {
+    discardPending(ctx, s) {
+        const pending = s.pendingEvent;
+        if (pending) {
+            pending.event.status = 'discarded';
+            if (pending.guideId && s.discussion.guide?.id === pending.guideId) {
+                s.discussion.guide.pool = s.discussion.guide.pool.filter(event => event.id !== pending.event.id);
+            }
+            const cycle = s.cycles[pending.cycleKey];
+            if (cycle && cycle.status !== 'consumed') { cycle.event = null; cycle.injection = ''; cycle.guideId = null; cycle.majorId = null; }
+            s.pendingEvent = null;
+        }
+        this.runAbortCleanup?.(); this.runAbortCleanup = null;
+        this.run = null; this.clear(); this.save(ctx, s);
+    }
+    async reroll({ enable = false } = {}) {
+        const ctx = this.context(), s = this.state(ctx);
+        if (!s || this.disposed || this.busy || (this.fill && !(s.majorEvent && !s.majorEvent.started)) || this.discussion?.guideTask) return false;
+        if (enable && !s.enabled) { s.enabled = true; this.save(ctx, s); }
+        if (!s.enabled) return false;
+        const key = s.pendingEvent?.cycleKey || (this.run?.metadata === ctx.chatMetadata && s.cycles[this.run.cycleKey]?.status === 'pending' ? this.run.cycleKey : null);
+        if (s.majorEvent && !s.majorEvent.started) this.clearMajor(ctx, s, { restore: true, reason: '重大事件生效前重投' });
+        this.discardPending(ctx, s);
+        this.trace('重新投掷', 'info', '已废弃待用事件，从剩余候选中重新随机抽取；不提前生成事件池。');
+        const done = await this.rollNow({ allowPrepare: false });
+        if (done && key && s.cycles[key] && ctx.chatMetadata === this.context().chatMetadata) {
+            Object.assign(s.cycles[key], { event: s.pendingEvent.event, injection: s.pendingEvent.injection, guideId: s.pendingEvent.guideId || null, majorId: s.majorEvent?.id || null });
+            s.pendingEvent.cycleKey = key; this.save(ctx, s);
+        }
+        return done;
+    }
+    async regeneratePool() {
+        const ctx = this.context(), s = this.state(ctx);
+        if (!s?.enabled || this.disposed || this.busy || this.fill || this.discussion?.guideTask) return false;
+        const count = s.eventPool.length;
+        s.eventPool = []; s.refillAttempt = null; s.error = '';
+        this.trace('重新生成事件池', 'info', '用户手动废弃普通候选池并重新生成；已抽取的待用事件保留。', { count });
+        this.save(ctx, s);
+        return this.refill(true);
+    }
+    async rollNow({ enable = false, allowPrepare = true } = {}) {
         this.trace('手动掷骰', 'info', '用户点击立即掷骰；这里只准备事件，要正常发送消息才会注入。', {}, undefined, '');
         const ctx = this.context(), s = this.state(ctx);
         // Enable without starting update()'s background refill: this roll owns the empty-pool request.
@@ -480,21 +680,27 @@ export class Director {
         if (!s?.enabled || this.busy) { this.trace('手动掷骰', 'skip', '当前聊天未开启导演，或主 AI 正在生成。', {}, s?.owner, ''); return false; }
         if (s.pendingEvent) return true;
         if (s.discussion.guide) {
-            if (!s.discussion.guide.pool.length) await this.discussion?.prepareGuide();
+            if (!s.discussion.guide.pool.length && allowPrepare) await this.discussion?.prepareGuide();
             if (this.context().chatMetadata !== ctx.chatMetadata || !s.enabled || this.busy) return false;
             const guide = s.discussion.guide, event = guide && choose(guide.pool, this.rng);
             if (!event) return false;
-            s.pendingEvent = { cycleKey: null, event, guideId: guide.id, injection: hiddenPrompt(event, s.directorPreset, ctx) };
-            this.trace('待用事件就绪', 'success', '方向事件已准备，等待下一次正常生成。', {}, s.owner, ''); this.save(ctx, s); return true;
+            const beganMajor = this.beginMajor(ctx, s, event);
+            s.pendingEvent = { cycleKey: null, event, guideId: guide.id, majorId: s.majorEvent?.id || null, injection: this.eventInjection(event, s, ctx) };
+            this.trace('待用事件就绪', 'success', '方向事件已准备，等待下一次正常生成。', {}, s.owner, ''); this.save(ctx, s);
+            if (beganMajor) void this.refill(true);
+            return true;
         }
-        if (assistantTurns(ctx.chat) - s.eventPoolGenerationTurn >= s.expiryTurns) s.eventPool = [];
-        if (!s.eventPool.length) await this.refill(true);
+        if (this.poolExpired(ctx, s)) s.eventPool = [];
+        if (!s.eventPool.length && allowPrepare) await this.refill();
         if (this.context().chatMetadata !== ctx.chatMetadata || !s.enabled || this.busy) return false;
         const event = choose(s.eventPool, this.rng);
         if (!event) return false;
         event.status = 'pending'; s.eventPool = s.eventPool.filter(e => e.id !== event.id);
-        s.pendingEvent = { cycleKey: null, event, injection: hiddenPrompt(event, s.directorPreset, ctx) };
-        this.trace('待用事件就绪', 'success', '普通事件已准备，等待下一次正常生成。', {}, s.owner, ''); this.save(ctx, s); return true;
+        const beganMajor = this.beginMajor(ctx, s, event);
+        s.pendingEvent = { cycleKey: null, event, majorId: s.majorEvent?.id || null, injection: this.eventInjection(event, s, ctx) };
+        this.trace('待用事件就绪', 'success', '事件已准备，等待下一次正常生成。', {}, s.owner, ''); this.save(ctx, s);
+        if (beganMajor) void this.refill(true);
+        return true;
     }
     dispose() { this.disposed = true; this.runAbortCleanup?.(); this.runAbortCleanup = null; this.discussion?.cancel(); this.cancelFill(); this.clear(); this.run = null; }
 }
@@ -502,3 +708,4 @@ import { activePreset, generatorText, injectionText, normalizePreset } from './p
 import { activeHeader, normalizeHeader, headerMessages, builtinHeaderReference } from './headers.js';
 import { discussionState } from './discussion-state.js';
 import { PERSONA_PREFERENCES_KEY } from './personas.js';
+import { majorPoolInstruction, majorInjection, majorTurnEvent } from './major-events.js';

@@ -230,6 +230,8 @@
 #red_director_window .red-event-card h3 { margin-top: 11px; }
 #red_director_window .red-event-recent { margin-top: 12px; padding-top: 10px; }
 #red_director_window .red-event-actions { display: grid; grid-template-columns: 116px minmax(0, 1fr); align-items: center; gap: 12px; margin: 10px 0 5px; }
+#red_director_window .red-event-pool-actions { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+#red_director_window .red-event-pool-actions button { flex: 0 0 auto; width: 100%; }
 #red_director_window .red-event-actions .red-dice-button { display: flex; flex-direction: column; gap: 3px; width: 116px; padding: 0; min-height: 0; border: 0; background: transparent; color: #f0d0a0; font-size: .78em; }
 #red_director_window .red-event-actions .red-dice-button:hover:enabled { background: transparent; border: 0; }
 #red_director_window .red-dice-button .red-d10 { width: 80px; height: 86px; }
@@ -247,6 +249,16 @@
 .red-d10 .red-die-glint { fill: none; stroke: #fff0cb; stroke-width: 1.3; }
 #red_director_dice_dock { position: fixed; z-index: 10002; right: 18px; bottom: 155px; display: flex; flex-direction: column; align-items: center; gap: 2px; width: 72px; font: 12px/1.4 system-ui, sans-serif; color: #f3d6a6; text-shadow: none; }
 #red_director_dice_dock[hidden] { display: none !important; }
+#red_director_dice_dock.red-major-active { width: min(220px, calc(var(--red-visible-width, 100vw) - 16px)); align-items: flex-end; gap: 6px; }
+#red_director_dice_dock [hidden], #red_director_window .red-major-status[hidden] { display: none !important; }
+.red-major-status { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid #a98857; border-radius: 10px; background: #17243bf5; color: #f4debb; box-sizing: border-box; text-shadow: none; }
+#red_director_dice_dock .red-major-status { width: 100%; max-height: min(240px, 45vh); overflow: auto; box-shadow: 0 5px 18px #0005; }
+#red_director_window .red-major-status { margin: 8px 0; font-size: .85em; }
+.red-major-status small { color: #e5bd7f; }
+.red-major-status strong { overflow-wrap: anywhere; }
+.red-major-status span { color: #b6c2d8; font-size: 12px; }
+#red_director_dice_dock .red-major-status button { width: 100%; margin: 2px 0 0; padding: 7px 10px; min-height: 34px; border: 1px solid #64718a; border-radius: 7px; background: #22314a; color: #f4debb; font: inherit; cursor: pointer; }
+#red_director_dice_dock .red-major-status button:disabled { opacity: .55; cursor: default; }
 #red_director_dice_dock .red-floating-die { display: block; width: 64px; height: 70px; padding: 3px; margin: 0; background: transparent; border: 0; border-radius: 10px; box-shadow: none; cursor: pointer; transition: transform .18s; }
 #red_director_dice_dock .red-floating-die .red-d10 { width: 100%; height: 100%; }
 #red_director_dice_dock .red-floating-die:hover:enabled { transform: translateY(-3px); }

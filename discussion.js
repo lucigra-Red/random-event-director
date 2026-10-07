@@ -89,7 +89,7 @@ export class Discussion {
         this.guideTask?.controller.abort(); this.guideTask = null;
         // An unbound manual selection can be replaced; a bound failed turn keeps its frozen arrangement.
         if (s.pendingEvent && !s.pendingEvent.cycleKey) {
-            if (!s.pendingEvent.guideId) s.eventPool = [{ ...s.pendingEvent.event, status: 'available' }, ...s.eventPool].slice(0, s.targetCount);
+            if (!s.pendingEvent.guideId && s.pendingEvent.event.id !== s.majorEvent?.id) s.eventPool = [{ ...s.pendingEvent.event, status: 'available' }, ...s.eventPool].slice(0, s.targetCount);
             s.pendingEvent = null;
         }
         disc.guide = { id: d.makeId(), summary: disc.proposal.summary, pool: [] }; disc.proposal = null; disc.error = '';
@@ -112,15 +112,17 @@ export class Discussion {
         const d = this.director, ctx = d.context(), s = d.state(ctx), disc = s && discussionState(s);
         if (!disc?.guide || disc.guide.pool.length || this.guideTask || d.disposed) return false;
         if (!manual && s.refillStopped) return false;
-        const id = disc.guide.id, task = { controller: new AbortController(), owner: s.owner, revision: this.revision, id };
+        const id = disc.guide.id, majorId = s.majorEvent?.id || null, task = { controller: new AbortController(), owner: s.owner, revision: this.revision, id };
         this.guideTask = task; disc.error = ''; d.changed();
         d.trace('方向事件生成', 'info', '使用已确认总结生成本次事件候选。', { needed: 3, contextMessages: s.contextMessages }, s.owner, '');
         try {
             const settings = structuredClone(s), messages = poolPrompt(ctx, settings, 3);
             messages.push({ role: 'user', content: `用户已确认的本次事件方向：${disc.guide.summary}\n仅为这一次事件生成 3 个不同候选起因。保留玩家自主权，仍遵守上面的 events JSON 格式。` });
             const response = await this.timed(task, ctx, messages, settings);
-            if (!this.current(ctx, task.owner, task.revision) || this.guideTask !== task || task.controller.signal.aborted || disc.guide?.id !== id) return false;
+            if (!this.current(ctx, task.owner, task.revision) || this.guideTask !== task || task.controller.signal.aborted || disc.guide?.id !== id || (s.majorEvent?.id || null) !== majorId) return false;
             disc.guide.pool = parseEvents(response, 3, d.makeId); s.refillStopped = false; s.generationFailure = null; s.error = '';
+            disc.guide.majorId = majorId;
+            if (majorId) for (const event of disc.guide.pool) event.severity = 'ordinary';
             d.trace('方向事件就绪', 'success', '方向候选已准备，只等待一次事件触发。', { count: disc.guide.pool.length }, s.owner, ''); d.save(ctx, s); return true;
         } catch (e) {
             d.trace('方向事件生成', 'error', '方向候选未生成成功；请检查副 AI 请求或输出格式。', {}, s.owner, '');

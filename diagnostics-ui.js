@@ -1,5 +1,5 @@
 export function mountDiagnosticsUI(host, diagnostics, doc = document) {
-    host.innerHTML = `<p class="red-settings-intro">记录事件生成、抽取、注入和请求组装过程。仅保留本次页面会话最近 300 条；刷新后清空。不会记录密钥、聊天正文或完整提示词。</p>
+    host.innerHTML = `<p class="red-settings-intro">运行诊断：自动查询全局、预设、当前角色卡的酒馆助手脚本，并记录实际请求和注入情况。启动、切换聊天和脚本变化时自动更新；捕获到脚本调用时记录名字和调用编号。启用列表与并发候选不代表请求来源，更不代表干扰证据；无法识别时标为未知。最近 1000 条，刷新清空；不记录脚本代码、变量、密钥或聊天正文。</p>
       <div class="red-log-controls"><label><input type="checkbox" data-log="record" checked>记录日志</label><label><input type="checkbox" data-log="current" checked>仅当前聊天</label><label><input type="checkbox" data-log="follow" checked>自动滚动</label></div>
       <div class="red-window-actions"><button type="button" data-log-action="copy">复制日志</button><button type="button" data-log-action="export">导出 JSON</button><button type="button" data-log-action="report">查看报告</button><button type="button" data-log-action="clear">清空日志</button></div>
       <p class="red-log-status" data-log-role="status" role="status"></p><textarea data-log-role="report" aria-label="可复制诊断报告" rows="8" readonly hidden></textarea><div class="red-log-list" data-log-role="list" role="log" aria-label="导演诊断日志" tabindex="0"></div>`;
@@ -31,7 +31,10 @@ export function mountDiagnosticsUI(host, diagnostics, doc = document) {
     }
     const change = event => {
         notice = '';
-        if (event.target === field('record') && diagnostics) diagnostics.enabled = event.target.checked;
+        if (event.target === field('record') && diagnostics) {
+            diagnostics.enabled = event.target.checked;
+            if (diagnostics.enabled) diagnostics.refreshScripts?.();
+        }
         fingerprint = ''; refresh();
     };
     const click = async event => {
@@ -39,7 +42,7 @@ export function mountDiagnosticsUI(host, diagnostics, doc = document) {
         if (!action || !diagnostics) return;
         try {
             notice = '';
-            if (action === 'clear') diagnostics.clear(field('current').checked);
+            if (action === 'clear') { diagnostics.clear(field('current').checked); diagnostics.refreshScripts?.(); }
             else if (action === 'report') { report.hidden = !report.hidden; if (!report.hidden) { report.value = diagnostics.export(field('current').checked); report.focus(); report.select(); } }
             else if (action === 'copy') {
                 await doc.defaultView.navigator.clipboard.writeText(diagnostics.export(field('current').checked)); notice = '诊断日志已复制。';

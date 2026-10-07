@@ -8,6 +8,8 @@ import { Discussion } from './discussion.js';
 import { Diagnostics, inspectPrompt, errorCategory } from './diagnostics.js';
 import { requestGenerationType, eventGenerationType, stripOwnedInjection } from './request-isolation.js';
 import { placeEventInMessages } from './outgoing-injection.js';
+import { forcePayload, installRequestTrace } from './request-trace.js';
+import { installTavernHelperTrace } from './tavern-helper-trace.js';
 
 const PROMPT_KEY = 'random_event_director_one_turn';
 const INSTANCE_KEY = '__randomEventDirectorV1';
@@ -18,7 +20,7 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
     const context = () => host.getContext();
     const ctx = context(), bus = ctx.eventSource, events = ctx.eventTypes;
     if (!bus?.on || !events?.GENERATION_STARTED || !ctx.setExtensionPrompt) throw new Error('酒馆缺少生成事件或隐藏提示词接口');
-    let ui, injectionActive = false;
+    let ui, requestTrace, injectionActive = false;
     const diagnostics = new Diagnostics(context);
     const presets = new PresetLibrary({ storage: () => context().extensionSettings,
         persist: () => context().saveSettingsDebounced(), makeId: uuid });
@@ -28,6 +30,7 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
         persist: () => context().saveSettingsDebounced() });
     const director = new Director({ context, request: (ctx, messages, settings, signal) => {
         const config = connection.read();
+        requestTrace?.markSecondary(signal);
         director.trace('副 AI 连接', 'info', '使用当前副 AI 连接发送请求；请求内容和凭据不写入日志。', { connectionMode: config.mode }, undefined, '');
         return requestPool(ctx, messages, settings, signal, config);
     }, presets, headers, connection, diagnostics,
@@ -49,6 +52,14 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
         persist: snapshot => snapshot.saveMetadata(), changed: () => ui?.refresh(),
         log: (...args) => console.warn(...args) });
     new Discussion(director);
+    const helperTrace = installTavernHelperTrace({ context, doc, record: (...args) => director.trace(...args) });
+    diagnostics.refreshScripts = () => helperTrace.query();
+    requestTrace = installRequestTrace({ context, helperTrace, getEvent: () => {
+        const state = director.state(), run = director.run;
+        if (state?.forceInjection && run && !run.cycleKey && !run.completed && !run.stopped) director.intercept(run.type);
+        return director.forcedEvent();
+    },
+        onTransport: (...args) => director.transport(...args), record: (...args) => director.trace(...args) });
     const bindings = [], outgoingBindings = [];
     function listen(name, fn, late = false) {
         if (!events[name]) return;
@@ -89,6 +100,25 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
     function observeRequest(payload, dryRun, stage, final = false) {
         if (dryRun) return;
         const state = director.state(), run = director.run;
+        if (state?.enabled && state.forceInjection) {
+            if (run && !run.cycleKey && !run.stopped && !run.completed && run.metadata === context().chatMetadata) {
+                try { director.intercept(run.type); } catch { /* Keep the selected event available to the transport fallback. */ }
+            }
+            const current = director.forcedEvent();
+            if (!current?.injection) return;
+            const changed = final && forcePayload(payload, current.injection);
+            const check = inspectPrompt(payload, current.injection, current.event.content);
+            if (final && run && !run.stopped && !run.completed && run.metadata === current.metadata && check.found) {
+                run.injected = true; if (director.diagnosticRun) director.diagnosticRun.injected = true;
+                director.requestChecked(check, true);
+            }
+            director.trace(final ? '强制注入对象' : stage, check.found ? 'success' : 'warn',
+                check.found ? '强制模式已在此请求中检测到事件；不因后台类型、重生成或并发归属不明跳过。'
+                    : '此阶段没有检测到事件，继续等待传输层检查；没有新抽取事件。',
+                { generationType: requestGenerationType(payload) || 'unknown', injectionTarget: Array.isArray(payload?.messages) ? 'system' : 'prompt-prefix',
+                    forceInjection: true, changed: Boolean(changed), characters: current.injection.length });
+            return;
+        }
         if (!state || !run || run.metadata !== context().chatMetadata || state.owner !== run.owner) return;
         const type = requestGenerationType(payload);
         let cycle = state.cycles[run.cycleKey];
@@ -117,17 +147,19 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
             }
             if (director.run === run && !run.stopped && !run.completed && !run.ownershipUncertain && cycle?.event && cycle.injection
                 && !(cycle.status === 'consumed' && run.type === 'normal')) {
-                const result = placeEventInMessages(payload.messages, cycle.injection, { allowUser: ['normal', 'regenerate', 'swipe'].includes(run.type) });
+                const result = placeEventInMessages(payload.messages, cycle.injection, {
+                    allowUser: ['normal', 'regenerate', 'swipe'].includes(run.type), mode: state.injectionMode });
                 if (result.changed) payload.messages = result.messages;
                 const verified = inspectPrompt(payload, cycle.injection, cycle.event.content);
                 if (verified.found) {
                     run.injected = true; director.diagnosticRun.injected = true;
                     director.trace('出站事件整理', result.changed ? 'success' : 'info', result.changed
-                        ? (result.reason === 'moved' ? '已将初月事件整理到玩家消息前部并自检；其他扩展内容保持原样。'
+                        ? (state.injectionMode === 'system' ? '已将本轮事件整理为一份独立系统消息并自检；不附着在聊天楼层中。'
+                            : result.reason === 'moved' ? '已将初月事件整理到玩家消息前部并自检；其他扩展内容保持原样。'
                             : result.count > 1 ? '已合并初月事件的重复副本并自检；其他扩展内容保持原样。'
                                 : '发送前发现事件缺失，已从当前回合补回并自检；未重新抽取事件。')
                         : '完整事件已在请求中；当前格式不适合移动，保留原位置，避免破坏预填或其他内容。',
-                        { count: result.count || 0, characters: cycle.injection.length });
+                        { count: result.count || 0, characters: cycle.injection.length, injectionMode: state.injectionMode });
                 } else director.trace('出站事件整理', 'warn', '无法确认完整事件已进入当前发送数据；保留事件，不将本次标记为已使用。');
             }
         }
@@ -153,13 +185,15 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
     listen('GENERATE_AFTER_DATA', (data, dryRun) => { rearmOutgoing(true); observeSafely(data, dryRun, '主请求组装检测'); }, true);
     listen('CHAT_COMPLETION_SETTINGS_READY', data => observeSafely(data, false, 'Chat Completion 发送前检测', true), true);
     listen('TEXT_COMPLETION_SETTINGS_READY', data => observeSafely(data, false, 'Text Completion 发送前检测', true), true);
-    diagnostics.record('插件加载', 'success', '诊断日志已启动。仅在当前页面内存保存，使用聊天编号，不记录角色名、密钥、请求头或完整提示词。',
+    diagnostics.record('插件加载', 'success', '导演系统已启动。记录实际请求、完整响应、注入对象和可识别的插件调用链；未知来源不作归因。不记录聊天正文、密钥、请求头或完整提示词。',
         { assembledHook: !!events.GENERATE_AFTER_DATA, requestHook: !!events.CHAT_COMPLETION_SETTINGS_READY }, { owner: null });
     if (!events.GENERATE_AFTER_DATA) diagnostics.record('宿主兼容性', 'warn', '酒馆没有提供主请求组装事件；部分注入检测不可用，不能据此判定注入失败。', {}, { owner: null });
     if (!bus.makeLast) diagnostics.record('宿主兼容性', 'warn', '宿主没有监听顺序调整接口；发送前整理仍可运行，但无法确保排在后加载的扩展之后。', {}, { owner: null });
     rearmOutgoing();
     refreshUI();
     function dispose() {
+        requestTrace.dispose();
+        helperTrace.dispose();
         doc.removeEventListener?.('click', userStop, true);
         director.dispose(); ui?.dispose();
         for (const [name, handler] of bindings) bus.removeListener(name, handler);

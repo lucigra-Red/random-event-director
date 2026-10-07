@@ -1,10 +1,19 @@
 import { chatIdentity } from './engine.js';
 import { CURRENT_VERSION } from './updates.js';
 
-const detailKeys = new Set(['count', 'needed', 'characters', 'contextMessages', 'probability', 'roll', 'poolCount',
-    'guideCount', 'expectedCharacters', 'scannedCharacters', 'eventFound', 'storeReadable', 'storeMatches', 'assembledHook', 'requestHook', 'truncated']);
-const enumDetails = { generationType: ['normal', 'regenerate', 'swipe', 'continue', 'append', 'quiet', 'impersonate'],
-    connectionMode: ['current', 'independent'], mainApi: ['openai', 'textgenerationwebui', 'kobold', 'koboldhorde', 'novel'] };
+const detailKeys = new Set(['count', 'needed', 'characters', 'contextMessages', 'probability', 'roll', 'poolCount', 'interval', 'roundProgress',
+    'guideCount', 'expectedCharacters', 'scannedCharacters', 'eventFound', 'storeReadable', 'storeMatches', 'assembledHook', 'requestHook', 'truncated',
+    'forceInjection', 'eventPresent', 'changed', 'httpStatus', 'durationMs', 'requestNumber', 'notificationNumber', 'activeRequests', 'samePayloadCount',
+    'helperAvailable', 'scriptListAvailable', 'scriptCount', 'scriptEnabled', 'scriptWindowPresent', 'helperActiveCalls']);
+const enumDetails = { generationType: ['normal', 'regenerate', 'swipe', 'continue', 'append', 'quiet', 'impersonate', 'unknown'],
+    connectionMode: ['current', 'independent'], injectionMode: ['user', 'system', 'force'],
+    requestRole: ['foreground', 'background', 'secondary', 'unknown'],
+    mainApi: ['openai', 'textgenerationwebui', 'kobold', 'koboldhorde', 'novel'],
+    injectionTarget: ['system', 'prompt-prefix', 'none'], sourceEvidence: ['stack', 'unknown'],
+    endpointType: ['chat-backend', 'text-backend', 'chat-api'], outcome: ['response', 'aborted', 'network-error', 'complete', 'incomplete'],
+    scriptScope: ['global', 'preset', 'character', 'unknown'], scriptEvidence: ['api-call', 'iframe-stack', 'generation-id', 'candidate', 'unknown'] };
+const safeTextKeys = new Set(['requestId', 'samePayloadAs', 'model', 'sourcePlugins', 'sourceFrames', 'notificationType',
+    'helperVersion', 'helperCallId', 'helperMethod', 'helperEvent', 'scriptName', 'scriptId', 'candidateScripts']);
 const normalize = text => text.replace(/\s+/g, ' ').trim();
 export function inspectPrompt(payload, injection, eventContent) {
     const prompt = payload?.messages ?? payload?.prompt;
@@ -42,7 +51,7 @@ export function errorCategory(error) {
     return '发生异常；请结合当前阶段检查，原始错误内容不写入诊断日志';
 }
 export class Diagnostics {
-    constructor(context, { now = () => new Date(), limit = 300, version = CURRENT_VERSION } = {}) {
+    constructor(context, { now = () => new Date(), limit = 1000, version = CURRENT_VERSION } = {}) {
         Object.assign(this, { context, now, limit, version });
         this.entries = []; this.scopes = new Map(); this.listeners = new Set(); this.enabled = true; this.sequence = 0; this.runs = 0;
     }
@@ -55,8 +64,12 @@ export class Diagnostics {
     begin() { return `生成 ${++this.runs}`; }
     record(stage, status, message, details = {}, { owner, runId = '' } = {}) {
         if (!this.enabled) return;
-        const safeDetails = Object.fromEntries(Object.entries(details).filter(([key, value]) =>
-            (detailKeys.has(key) && (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))) || (Object.hasOwn(enumDetails, key) && enumDetails[key].includes(value))));
+        const safeDetails = Object.fromEntries(Object.entries(details).flatMap(([key, value]) => {
+            if ((detailKeys.has(key) && (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))))
+                || (Object.hasOwn(enumDetails, key) && enumDetails[key].includes(value))) return [[key, value]];
+            if (safeTextKeys.has(key) && typeof value === 'string') return [[key, value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 500)]];
+            return [];
+        }));
         this.entries.push({ id: ++this.sequence, time: this.now().toISOString(), scope: this.scope(owner), run: runId,
             stage, status, message, details: safeDetails });
         if (this.entries.length > this.limit) this.entries.splice(0, this.entries.length - this.limit);

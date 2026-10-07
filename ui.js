@@ -11,20 +11,31 @@ export function mountUI(director, context, doc = document) {
       <p class="red-help">为当前聊天加入偶发情境。先配置副 AI，再开启随机事件。</p>
       <p class="red-help" data-role="settings-scope"></p>
       <label><input type="checkbox" data-setting="enabled"> <span data-role="enabled-label">开启本聊天的随机事件导演</span></label>
+      <label><input type="checkbox" data-setting="fixedRoundEnabled"> 开启固定回合随机</label>
+      <div data-role="fixed-rounds" hidden><label>固定回合数<input class="text_pole" type="number" min="1" max="100" data-setting="fixedRoundInterval"></label><p class="red-help" data-role="fixed-progress"></p></div>
       <div class="red-grid">
         <label>随机事件概率（%）<input class="text_pole" type="number" min="0" max="100" data-setting="triggerProbability"></label>
         <label>近期消息数量<input class="text_pole" type="number" min="1" max="40" data-setting="contextMessages"></label>
       </div>
       <label><input type="checkbox" data-setting="includeHiddenMessages"> 读取隐藏楼层</label>
       <p class="red-help">勾选后，后续事件生成和小窗讨论也会读取隐藏楼层，仍按近期消息数量与字数上限截取。不改变主聊天的隐藏状态。</p>
+      <label><input type="checkbox" data-setting="hideDice"> 隐藏悬浮骰子</label>
+      <label class="red-column">事件注入方式<select class="text_pole" data-setting="injectionMode">
+        <option value="user">现有方式 · 随用户消息</option>
+        <option value="system">兼容方式 · 独立系统消息</option>
+        <option value="force">强制注入 · 每个生成请求</option>
+      </select></label>
+      <p class="red-help">兼容方式使用独立系统消息。强制方式把本轮待用事件加入每个可识别的生成请求，包括后台、重试和未知类型请求；完整正文成功后结束本轮。生成过程中暂不能切换。</p>
       <details><summary>高级设置</summary><div class="red-grid">
         <label><input type="checkbox" data-setting="outgoingInjection"> 增强事件注入</label>
         <label>事件池目标数量<input class="text_pole" type="number" min="1" max="20" data-setting="targetCount"></label>
-        <label>自动补充阈值<input class="text_pole" type="number" min="0" max="19" data-setting="refillThreshold"></label>
-        <label>事件池保留回合<input class="text_pole" type="number" min="1" max="50" data-setting="expiryTurns"></label>
+        <label>事件池更新间隔上限（回合）<input class="text_pole" type="number" min="5" max="10" data-setting="expiryTurns"></label>
+        <label>重大事件持续回合<input class="text_pole" type="number" min="1" max="20" data-setting="majorEventTurns"></label>
         <label>副 AI 超时（秒）<input class="text_pole" type="number" min="5" max="180" data-setting="timeoutSeconds"></label>
       </div></details>
-      <p class="red-help">增强事件注入会在发送前整理或补回本轮事件，保留其他插件的内容。遇到特殊预设不兼容时可关闭。</p>
+      <p class="red-help">每批事件池在 5 回合至设置上限之间随机选定更新回合，最多 10 回合更新一次。到期前用完不自动补充，掷骰也不会提前补池；可手动更新事件池。到期时未用完的候选也会更新，已抽取的事件保留。</p>
+      <p class="red-help">重大事件默认持续 5 个成功回复回合，期间使用相关事件池，最后一回合尝试自然收尾。到期或手动结束后恢复普通池；失败和同一回合重生成不重复计数。修改持续回合只影响之后抽取的重大事件。</p>
+      <p class="red-help">增强事件注入用于前两种注入方式：发送前补回缺失的本轮事件、整理重复副本，保留其他插件的内容。遇到特殊预设不兼容时可关闭。强制方式始终补写事件，不受此开关影响。</p>
       <div data-role="connection-host"></div>
       <div data-role="current-model" class="red-body"><label><input type="checkbox" data-setting="useCurrentModel"> 沿用主 API 的当前模型</label>
       <p class="red-help">已使用主 API 的连接；取消勾选仅用于在同一 API 下指定其他模型。</p>
@@ -55,10 +66,14 @@ export function mountUI(director, context, doc = document) {
         if (!s?.pendingEvent && notice === '随机事件已准备，将在下一次正常生成时生效。') notice = '';
         for (const el of root.querySelectorAll('[data-setting]')) {
             const name = el.dataset.setting;
-            el.disabled = !s || (name === 'model' && s.useCurrentModel);
+            el.disabled = !s || (name === 'model' && s.useCurrentModel) || (name === 'triggerProbability' && s.fixedRoundEnabled)
+                || (name === 'injectionMode' && director.busy);
             if (el.type === 'checkbox') el.checked = Boolean(s?.[name]);
             else if (doc.activeElement !== el) el.value = s?.[name] ?? '';
         }
+        field('fixed-rounds').hidden = !s?.fixedRoundEnabled;
+        field('fixed-progress').textContent = chat ? `每 ${s.fixedRoundInterval} 个新回合随机触发一次，当前已完成 ${chat.fixedRoundProgress} / ${s.fixedRoundInterval} 回合。完整回复后计数，重生成和后台请求不重复计数。`
+            : '默认 5 回合，可自行设置；新聊天从第一个回合开始计数。关闭后恢复概率触发。';
         field('count').textContent = chat ? `当前可用事件池：${chat.eventPool.length} / ${chat.targetCount}${director.fill ? ' · 副 AI 生成中…' : ''}` : '打开聊天后才能生成事件。';
         field('pending').textContent = chat?.pendingEvent ? '随机事件已准备，将在对应的下一次正常生成时生效。' : '当前没有待用事件。';
         field('recent').textContent = `最近触发：${chat?.recentEvent?.title || '暂无'}`;
@@ -103,15 +118,22 @@ export function mountUI(director, context, doc = document) {
             refresh();
             const done = await task;
             if (director.state()?.owner !== owner) { refresh(); return; }
-            notice = done ? (action === 'roll' ? '随机事件已准备，将在下一次正常生成时生效。' : '事件池已更新。') : '本次未准备新事件；正常聊天可继续。';
+            const state = director.state();
+            notice = done ? (action === 'roll' ? '随机事件已准备，将在下一次正常生成时生效。' : '事件池已更新。')
+                : state?.poolGenerated && !state.eventPool.length && !state.discussion.guide && !state.refillStopped
+                    ? '事件池已用完，请等待更新回合，或手动更新事件池。' : '本次未准备新事件；正常聊天可继续。';
         } catch (e) { director.fail(e); }
         refresh();
     };
-    root.addEventListener('change', onChange); root.addEventListener('click', onClick);
+    const onInput = event => {
+        const el = event.target;
+        if (el.dataset.setting === 'fixedRoundInterval' && el.value !== '' && el.validity.valid) onChange(event);
+    };
+    root.addEventListener('change', onChange); root.addEventListener('input', onInput); root.addEventListener('click', onClick);
     field('pool').addEventListener('toggle', refresh);
     workspace = mountWorkspace(director, context, root, host, doc);
     refresh();
-    return { refresh, dispose() { workspace.dispose(); connectionUI.dispose(); headerUI.dispose(); presetUI.dispose(); root.removeEventListener('change', onChange); root.removeEventListener('click', onClick); root.remove(); } };
+    return { refresh, dispose() { workspace.dispose(); connectionUI.dispose(); headerUI.dispose(); presetUI.dispose(); root.removeEventListener('change', onChange); root.removeEventListener('input', onInput); root.removeEventListener('click', onClick); root.remove(); } };
 }
 import { mountPresetUI } from './preset-ui.js';
 import { mountConnectionUI } from './connection-ui.js';

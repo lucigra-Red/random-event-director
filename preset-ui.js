@@ -1,4 +1,4 @@
-import { DEFAULT_PRESET, activePreset, normalizePreset } from './presets.js';
+import { DEFAULT_PRESET, BUILTIN_PRESETS, activePreset, normalizePreset } from './presets.js';
 
 export function mountPresetUI(host, director, context, doc) {
     host.innerHTML = `<details class="red-presets"><summary>导演预设管理</summary>
@@ -42,7 +42,7 @@ export function mountPresetUI(host, director, context, doc) {
         return normalizePreset({ ...draft, name: get('name').value, generatorPrompt: get('generatorPrompt').value,
             injectionTemplate: get('injectionTemplate').value });
     }
-    function catalog() { return director.presets?.list() || [{ ...DEFAULT_PRESET }]; }
+    function catalog() { return director.presets?.list() || BUILTIN_PRESETS.map(p => ({ ...p })); }
     function refresh() {
         if (disposed) return;
         try {
@@ -66,7 +66,7 @@ export function mountPresetUI(host, director, context, doc) {
             for (const control of root.querySelectorAll('[data-preset-field], [data-preset-action]')) {
                 control.disabled = !state || director.busy;
                 if (['save', 'copy', 'delete', 'import', 'export-all', 'new'].includes(control.dataset.presetAction) || control.dataset.presetField === 'file') control.disabled ||= !director.presets;
-                if (control.dataset.presetAction === 'delete') control.disabled ||= draft.id === DEFAULT_PRESET.id || !catalog().some(p => p.id === draft.id);
+                if (control.dataset.presetAction === 'delete') control.disabled ||= BUILTIN_PRESETS.some(p => p.id === draft.id) || !catalog().some(p => p.id === draft.id);
             }
         } catch (e) { role('notice').textContent = e.message; }
     }
