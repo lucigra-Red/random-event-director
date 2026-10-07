@@ -1,4 +1,7 @@
 const TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue', 'append', 'quiet', 'impersonate', 'first_message']);
+const secondaryPayloads = new WeakSet();
+export function markSecondaryPayload(payload) { secondaryPayloads.add(payload); }
+export function isSecondaryPayload(payload) { return secondaryPayloads.has(payload); }
 export function requestGenerationType(payload) {
     if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, 'type')) return null;
     // Native Chat Completion includes an undefined type for Generate()'s ordinary reply.

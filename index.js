@@ -183,8 +183,12 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
         catch { director.trace(stage, 'warn', '此阶段的注入检查或整理出现异常；普通聊天继续，无法确认时保留待用事件。'); }
     }
     listen('GENERATE_AFTER_DATA', (data, dryRun) => { rearmOutgoing(true); observeSafely(data, dryRun, '主请求组装检测'); }, true);
-    listen('CHAT_COMPLETION_SETTINGS_READY', data => observeSafely(data, false, 'Chat Completion 发送前检测', true), true);
-    listen('TEXT_COMPLETION_SETTINGS_READY', data => observeSafely(data, false, 'Text Completion 发送前检测', true), true);
+    listen('CHAT_COMPLETION_SETTINGS_READY', data => {
+        observeSafely(data, false, 'Chat Completion 发送前检测', true); director.rememberMainPrompt(data);
+    }, true);
+    listen('TEXT_COMPLETION_SETTINGS_READY', data => {
+        observeSafely(data, false, 'Text Completion 发送前检测', true); director.rememberMainPrompt(data);
+    }, true);
     diagnostics.record('插件加载', 'success', '导演系统已启动。记录实际请求、完整响应、注入对象和可识别的插件调用链；未知来源不作归因。不记录聊天正文、密钥、请求头或完整提示词。',
         { assembledHook: !!events.GENERATE_AFTER_DATA, requestHook: !!events.CHAT_COMPLETION_SETTINGS_READY }, { owner: null });
     if (!events.GENERATE_AFTER_DATA) diagnostics.record('宿主兼容性', 'warn', '酒馆没有提供主请求组装事件；部分注入检测不可用，不能据此判定注入失败。', {}, { owner: null });

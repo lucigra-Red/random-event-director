@@ -1,5 +1,6 @@
 import { apiBase, connectionConfig } from './connections.js';
 import { nativePreset } from './headers.js';
+import { markSecondaryPayload } from './request-isolation.js';
 
 const SAMPLING_KEYS = Object.freeze(['presence_penalty', 'frequency_penalty', 'top_p', 'top_k', 'temperature']);
 const COMPATIBILITY_KEYS = [...SAMPLING_KEYS, 'reasoning_effort'];
@@ -80,6 +81,11 @@ export async function requestModels(ctx, connection, signal, fetchImpl = globalT
 
 export async function requestPool(ctx, messages, settings, signal, connection = { mode: 'current' }) {
     const own = connectionConfig(connection);
+    const send = (service, payload) => {
+        const outbound = omitSampling(payload, own.excludeSampling);
+        markSecondaryPayload(outbound);
+        return service.sendRequest(outbound, true, signal);
+    };
     // Headers supply text through the caller's messages, never generation parameters.
     // Validate a selected native reference, but do not pass it to the host request converter.
     nativePreset(settings.headerPreset, ctx);
@@ -94,7 +100,7 @@ export async function requestPool(ctx, messages, settings, signal, connection = 
             custom_include_headers: JSON.stringify({ Authorization: own.apiKey ? `Bearer ${own.apiKey}` : '' }),
             custom_prompt_post_processing: '', model: own.model, messages, stream: false, max_tokens: 2200, n: 1, temperature: 0.8 };
         signal.throwIfAborted();
-        try { return (await service.sendRequest(omitSampling(payload, own.excludeSampling), true, signal)).content; }
+        try { return (await send(service, payload)).content; }
         catch (e) {
             const message = String(e?.message || '副 AI 请求失败');
             throw new Error(own.apiKey ? message.replaceAll(own.apiKey, '[已隐藏]') : message);
@@ -109,7 +115,7 @@ export async function requestPool(ctx, messages, settings, signal, connection = 
         if (!service?.presetToGeneratePayload || !service?.sendRequest) throw new Error('此酒馆版本缺少 ChatCompletionService；请更新标准 SillyTavern');
         const payload = await service.presetToGeneratePayload({}, {}, { ...overrides, messages });
         signal.throwIfAborted();
-        const result = await service.sendRequest(omitSampling(payload, own.excludeSampling), true, signal);
+        const result = await send(service, payload);
         return result.content;
     }
     if (ctx.mainApi === 'textgenerationwebui') {
@@ -118,7 +124,7 @@ export async function requestPool(ctx, messages, settings, signal, connection = 
         const prompt = messages.map(m => `${m.role.toUpperCase()}:\n${m.content}`).join('\n\n') + '\n\nASSISTANT:\n';
         const payload = await service.presetToGeneratePayload({}, {}, { ...overrides, prompt });
         signal.throwIfAborted();
-        return (await service.sendRequest(omitSampling(payload, own.excludeSampling), true, signal)).content;
+        return (await send(service, payload)).content;
     }
     throw new Error('V0.1 副 AI 支持酒馆 Chat Completion 和 Text Completion 连接；当前 API 暂不支持');
 }

@@ -19,6 +19,10 @@ export function mountUI(director, context, doc = document) {
       </div>
       <label><input type="checkbox" data-setting="includeHiddenMessages"> 读取隐藏楼层</label>
       <p class="red-help">勾选后，后续事件生成和小窗讨论也会读取隐藏楼层，仍按近期消息数量与字数上限截取。不改变主聊天的隐藏状态。</p>
+      <label><input type="checkbox" data-setting="useMainPromptContext"> 参考最近一次主 AI 提示词生成事件</label>
+      <p class="red-help">之后生成的事件池与方向候选会参考上次主请求中的世界书、记忆和剧情提示词，不等待当前发送，资料可能落后一轮。</p>
+      <p class="red-help">有快照时读取其中的文本资料，受字数上限限制；无快照时沿用近期消息和隐藏楼层设置。快照只保留在当前页面，刷新后需正常发送一次重新记录。</p>
+      <p class="red-help" data-role="main-prompt-status"></p>
       <label><input type="checkbox" data-setting="hideDice"> 隐藏悬浮骰子</label>
       <label class="red-column">事件注入方式<select class="text_pole" data-setting="injectionMode">
         <option value="user">现有方式 · 随用户消息</option>
@@ -67,11 +71,15 @@ export function mountUI(director, context, doc = document) {
         for (const el of root.querySelectorAll('[data-setting]')) {
             const name = el.dataset.setting;
             el.disabled = !s || (name === 'model' && s.useCurrentModel) || (name === 'triggerProbability' && s.fixedRoundEnabled)
-                || (name === 'injectionMode' && director.busy);
+                || (['injectionMode', 'useMainPromptContext'].includes(name) && director.busy);
             if (el.type === 'checkbox') el.checked = Boolean(s?.[name]);
             else if (doc.activeElement !== el) el.value = s?.[name] ?? '';
         }
         field('fixed-rounds').hidden = !s?.fixedRoundEnabled;
+        field('main-prompt-status').hidden = !s?.useMainPromptContext;
+        field('main-prompt-status').textContent = director.mainPromptSnapshot()
+            ? '已记录当前聊天的主提示词，后续生成事件池时参考。'
+            : '当前聊天尚无快照，暂按近期聊天和角色背景生成；正常发送一次主聊天后记录。';
         field('fixed-progress').textContent = chat ? `每 ${s.fixedRoundInterval} 个新回合随机触发一次，当前已完成 ${chat.fixedRoundProgress} / ${s.fixedRoundInterval} 回合。完整回复后计数，重生成和后台请求不重复计数。`
             : '默认 5 回合，可自行设置；新聊天从第一个回合开始计数。关闭后恢复概率触发。';
         field('count').textContent = chat ? `当前可用事件池：${chat.eventPool.length} / ${chat.targetCount}${director.fill ? ' · 副 AI 生成中…' : ''}` : '打开聊天后才能生成事件。';

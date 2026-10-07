@@ -1,4 +1,4 @@
-export const CURRENT_VERSION = '0.2.0';
+export const CURRENT_VERSION = '1.0.0';
 export const UPDATE_SETTINGS_KEY = 'random_event_director_updates_v1';
 export const REPOSITORY_URL = 'https://github.com/lucigra-Red/random-event-director';
 const SOURCES = [
