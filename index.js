@@ -10,6 +10,7 @@ import { requestGenerationType, eventGenerationType, stripOwnedInjection } from 
 import { placeEventInMessages } from './outgoing-injection.js';
 import { forcePayload, installRequestTrace } from './request-trace.js';
 import { installTavernHelperTrace } from './tavern-helper-trace.js';
+import { PromptPreview } from './main-prompt.js';
 
 const PROMPT_KEY = 'random_event_director_one_turn';
 const INSTANCE_KEY = '__randomEventDirectorV1';
@@ -52,9 +53,13 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
         persist: snapshot => snapshot.saveMetadata(), changed: () => ui?.refresh(),
         log: (...args) => console.warn(...args) });
     new Discussion(director);
+    const promptPreview = new PromptPreview(director, context, doc);
+    director.readMainPrompt = (...args) => promptPreview.read(...args);
     const helperTrace = installTavernHelperTrace({ context, doc, record: (...args) => director.trace(...args) });
     diagnostics.refreshScripts = () => helperTrace.query();
-    requestTrace = installRequestTrace({ context, helperTrace, getEvent: () => {
+    requestTrace = installRequestTrace({ context, helperTrace, previewing: () => Boolean(promptPreview.task),
+        blockRequest: details => promptPreview.blockRequest(details), getEvent: () => {
+        if (promptPreview.task) return null;
         const state = director.state(), run = director.run;
         if (state?.forceInjection && run && !run.cycleKey && !run.completed && !run.stopped) director.intercept(run.type);
         return director.forcedEvent();
@@ -64,6 +69,11 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
     function listen(name, fn, late = false) {
         if (!events[name]) return;
         const guarded = (...args) => {
+            if (promptPreview.task) {
+                promptPreview.capture(name, args[0]);
+                if (name === 'GENERATION_STARTED' && (promptPreview.start(args[1], args[2]) || promptPreview.task.started)) return;
+                if (['GENERATION_STOPPED', 'GENERATION_ENDED', 'MESSAGE_RECEIVED'].includes(name)) return;
+            }
             try { const result = fn(...args); if (result?.catch) result.catch(e => director.fail(e)); }
             catch (e) { director.trace('宿主事件异常', 'error', errorCategory(e)); director.clear(); director.fail(e); }
         };
@@ -79,6 +89,7 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
         }
     }
     const interceptor = (_chat, _size, _abort, type) => {
+        if (promptPreview.task) return;
         // Synchronous, bounded work only. Never wait for the secondary AI or abort the host.
         try { director.intercept(type); } catch (e) { director.trace('注入异常', 'error', errorCategory(e)); director.clear(); director.fail(e); }
     };
@@ -95,10 +106,13 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
     listen('MESSAGE_DELETED', id => director.invalidate('delete', id));
     listen('MESSAGE_SWIPED', id => director.invalidate('swipe', id));
     listen('MESSAGE_SWIPE_DELETED', id => director.invalidate('swipe', id));
-    const userStop = event => { if (event.target?.closest?.('#mes_stop')) { director.stop(true); ui?.refresh(); } };
+    const userStop = event => { if (event.target?.closest?.('#mes_stop')) {
+        if (promptPreview.task) promptPreview.cancel(); else director.stop(true);
+        ui?.refresh();
+    } };
     doc.addEventListener?.('click', userStop, true);
     function observeRequest(payload, dryRun, stage, final = false) {
-        if (dryRun) return;
+        if (dryRun || promptPreview.task) return;
         const state = director.state(), run = director.run;
         if (state?.enabled && state.forceInjection) {
             if (run && !run.cycleKey && !run.stopped && !run.completed && run.metadata === context().chatMetadata) {
@@ -184,10 +198,10 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
     }
     listen('GENERATE_AFTER_DATA', (data, dryRun) => { rearmOutgoing(true); observeSafely(data, dryRun, '主请求组装检测'); }, true);
     listen('CHAT_COMPLETION_SETTINGS_READY', data => {
-        observeSafely(data, false, 'Chat Completion 发送前检测', true); director.rememberMainPrompt(data);
+        observeSafely(data, false, 'Chat Completion 发送前检测', true);
     }, true);
     listen('TEXT_COMPLETION_SETTINGS_READY', data => {
-        observeSafely(data, false, 'Text Completion 发送前检测', true); director.rememberMainPrompt(data);
+        observeSafely(data, false, 'Text Completion 发送前检测', true);
     }, true);
     diagnostics.record('插件加载', 'success', '导演系统已启动。记录实际请求、完整响应、注入对象和可识别的插件调用链；未知来源不作归因。不记录聊天正文、密钥、请求头或完整提示词。',
         { assembledHook: !!events.GENERATE_AFTER_DATA, requestHook: !!events.CHAT_COMPLETION_SETTINGS_READY }, { owner: null });
@@ -196,6 +210,7 @@ export function install(host = globalThis.SillyTavern, doc = globalThis.document
     rearmOutgoing();
     refreshUI();
     function dispose() {
+        promptPreview.cancel();
         requestTrace.dispose();
         helperTrace.dispose();
         doc.removeEventListener?.('click', userStop, true);

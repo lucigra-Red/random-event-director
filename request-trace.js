@@ -129,7 +129,8 @@ export function observeResponse(response, finished) {
     return response;
 }
 
-export function installRequestTrace({ context, getEvent, record, helperTrace, onTransport = () => {}, host = globalThis, now = Date.now }) {
+export function installRequestTrace({ context, getEvent, record, helperTrace, onTransport = () => {}, blockRequest = () => null,
+    previewing = () => false, host = globalThis, now = Date.now }) {
     let disposed = false, sequence = 0, notification = 0;
     const active = new Set(), fingerprints = new Map(), secondarySignals = new WeakSet();
     const salt = globalThis.crypto?.randomUUID?.() || `${Math.random()}-${now()}`;
@@ -147,7 +148,9 @@ export function installRequestTrace({ context, getEvent, record, helperTrace, on
         if (!disposed) { try { helper = helperTrace?.onEvent(name, args) || {}; } catch { /* Optional helper. */ } }
         if (!disposed && watched.has(name)) {
             const type = typeof args[0] === 'string' ? args[0] : args.find(value => typeof value === 'string');
-            log('生成通知来源', 'info', '记录到酒馆生成通知；通知次数不等于实际 HTTP 请求次数。插件调用链仅为来源线索。',
+            log(previewing() ? '提示词参考模拟通知' : '生成通知来源', 'info', previewing()
+                ? '当前正在模拟空发送以读取提示词，不计为初月主回合；其他扩展也可能响应此通知。'
+                : '记录到酒馆生成通知；通知次数不等于实际 HTTP 请求次数。插件调用链仅为来源线索。',
                 { notificationNumber: ++notification, notificationType: watched.get(name),
                     generationType: requestGenerationType({ type: type || null }) || 'unknown', ...callerEvidence(new Error().stack), ...helper });
         }
@@ -172,6 +175,16 @@ export function installRequestTrace({ context, getEvent, record, helperTrace, on
         const route = endpointType(isRequest ? input.url : input);
         const method = String(init?.method ?? (isRequest ? input.method : 'GET')).toUpperCase();
         if (disposed || !route || method !== 'POST') return forward([input, init]);
+        if (previewing()) {
+            let previewPayload;
+            try { previewPayload = JSON.parse(typeof init?.body === 'string' ? init.body : isRequest ? await input.clone().text() : 'null'); } catch { /* Unknown native body still must not escape the preview. */ }
+            const signal = init?.signal ?? (isRequest ? input.signal : null);
+            const blocked = blockRequest({ route, payload: previewPayload, secondary: signal && secondarySignals.has(signal) });
+            if (blocked) {
+                log('提示词参考模拟终止', 'success', '模拟正文请求已在本地发送前终止，未转发到主 AI。', { endpointType: route });
+                throw blocked;
+            }
+        }
         const started = now(), requestNumber = ++sequence, requestId = `请求 ${requestNumber}`;
         const stack = new Error().stack;
         const evidence = { ...callerEvidence(stack), ...helperEvidence(stack) };

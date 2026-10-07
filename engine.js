@@ -138,23 +138,18 @@ export class Director {
         const snapshot = ctx?.chatMetadata && this.mainPromptSnapshots.get(ctx.chatMetadata);
         return snapshot?.owner === chatIdentity(ctx) ? snapshot.text : '';
     }
-    rememberMainPrompt(payload) {
-        const ctx = this.context(), s = this.state(ctx), run = this.run;
-        if (!s?.useMainPromptContext || !s.enabled || this.disposed || isSecondaryPayload(payload) || !run || run.stopped || run.completed
-            || run.signal?.aborted || run.ownershipUncertain || run.metadata !== ctx.chatMetadata || run.owner !== s.owner
-            || requestGenerationType(payload) !== run.type) return false;
-        const text = mainPromptText(payload, s, 60000, run.cycleKey);
-        if (!text) return false;
-        this.mainPromptSnapshots.set(ctx.chatMetadata, { owner: s.owner, text });
-        this.trace('主提示词快照', 'success', '已记录本聊天最近一次主 AI 发送前的文本提示词，供之后生成事件池参考；正文与完整提示词不写入日志或聊天存档。', { characters: text.length });
-        this.changed(); return true;
-    }
-    poolMessages(ctx, state, count) {
-        const snapshot = state.useMainPromptContext ? this.mainPromptSnapshot(ctx) : '';
-        if (state.useMainPromptContext) this.trace('事件生成资料', snapshot ? 'info' : 'warn', snapshot
-            ? '本次参考最近一次主 AI 提示词；资料可能落后一轮，不等待当前主请求。'
-            : '当前聊天尚无主提示词快照，按原方式读取近期聊天和角色背景。', { characters: Math.min(snapshot.length, state.contextChars) }, state.owner, '');
-        return poolPrompt(ctx, state, count, snapshot ? mainPromptText({ prompt: snapshot }, state) : '');
+    async poolMessages(ctx, state, count, signal) {
+        let text = '';
+        if (state.useMainPromptContext) {
+            this.trace('提示词参考', 'info', '模拟空发送，组装当前主提示词；截取后终止，不发送主 AI 请求。', {}, state.owner, '');
+            if (!this.readMainPrompt) throw new Error('酒馆主提示词预览接口不可用，请关闭“提示词参考”后重试');
+            text = await this.readMainPrompt(ctx, state, signal);
+            if (signal?.aborted || this.disposed || this.context().chatMetadata !== ctx.chatMetadata) throw new Error('提示词参考已取消');
+            this.mainPromptSnapshots.set(ctx.chatMetadata, { owner: state.owner, text });
+            this.trace('提示词参考', 'success', '已取得当前组装的文本提示词，主 AI 模拟请求已终止；仅用于这次候选生成。', { characters: text.length }, state.owner, '');
+            this.changed();
+        }
+        return poolPrompt(ctx, state, count, text);
     }
     saveDefaults(values, ctx = this.context()) {
         if (!ctx.extensionSettings) throw new Error('酒馆扩展设置不可用，暂时无法保存默认设置');
@@ -337,7 +332,12 @@ export class Director {
             const timeout = new Promise((_, reject) => { timer = setTimeout(() => {
                 controller.abort(); reject(new Error('副 AI 超时；正常聊天可继续'));
             }, s.timeoutSeconds * 1000); });
-            const response = await Promise.race([this.request(ctx, this.poolMessages(ctx, s, needed), s, controller.signal), timeout]);
+            const response = await Promise.race([(async () => {
+                const messages = await this.poolMessages(ctx, s, needed, controller.signal);
+                if (controller.signal.aborted || this.disposed || epoch !== this.epoch || this.context().chatMetadata !== ctx.chatMetadata || !s.enabled)
+                    throw new Error('事件生成已取消');
+                return this.request(ctx, messages, s, controller.signal);
+            })(), timeout]);
             this.trace('副 AI 返回', 'success', '已收到副 AI 响应，开始解析事件。', { characters: typeof response === 'string' ? response.length : 0 }, s.owner, '');
             if (this.disposed || controller.signal.aborted || epoch !== this.epoch || this.context().chatMetadata !== ctx.chatMetadata
                 || chatIdentity(this.context()) !== s.owner || !s.enabled) {
@@ -739,5 +739,3 @@ import { activeHeader, normalizeHeader, headerMessages, builtinHeaderReference }
 import { discussionState } from './discussion-state.js';
 import { PERSONA_PREFERENCES_KEY } from './personas.js';
 import { majorPoolInstruction, majorInjection, majorTurnEvent } from './major-events.js';
-import { mainPromptText } from './main-prompt.js';
-import { requestGenerationType, isSecondaryPayload } from './request-isolation.js';
