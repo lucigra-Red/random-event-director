@@ -12,19 +12,20 @@ export function fitPosition(rect, viewport, margin = 8) {
         top: Math.max(y, Math.min(rect.top, y + Math.max(0, viewport.height - margin * 2 - rect.height))) };
 }
 
-export function placeWidget(element, preferred) {
+export function placeWidget(element, preferred, { constrain = true } = {}) {
     if (element.hidden) return;
     const viewport = visibleViewport(element.ownerDocument.defaultView);
     element.style.setProperty('--red-visible-width', `${viewport.width}px`);
     element.style.setProperty('--red-visible-height', `${viewport.height}px`);
     const rect = element.getBoundingClientRect();
-    const position = fitPosition({ left: preferred?.left ?? rect.left, top: preferred?.top ?? rect.top,
-        width: rect.width, height: rect.height }, viewport);
+    const requested = { left: preferred?.left ?? rect.left, top: preferred?.top ?? rect.top,
+        width: rect.width, height: rect.height };
+    const position = constrain ? fitPosition(requested, viewport) : requested;
     Object.assign(element.style, { left: `${position.left}px`, top: `${position.top}px`, right: 'auto', bottom: 'auto' });
 }
 
 // A short tap still clicks. Only a real drag suppresses its following synthetic click.
-export function makeDraggable(element, handle, { canDrag = () => true, ignoreButtons = true } = {}) {
+export function makeDraggable(element, handle, { canDrag = () => true, ignoreButtons = true, constrain = () => true } = {}) {
     let drag = null, suppressClick = false;
     const start = event => {
         if (event.isPrimary === false || (event.button != null && event.button !== 0) || !canDrag()
@@ -39,7 +40,7 @@ export function makeDraggable(element, handle, { canDrag = () => true, ignoreBut
         const x = event.clientX - drag.x, y = event.clientY - drag.y;
         if (!drag.moved && Math.hypot(x, y) < 6) return;
         drag.moved = true; suppressClick = true;
-        placeWidget(element, { left: drag.left + x, top: drag.top + y });
+        placeWidget(element, { left: drag.left + x, top: drag.top + y }, { constrain: constrain() });
     };
     const end = event => {
         if (!drag || event.pointerId !== drag.pointer) return;

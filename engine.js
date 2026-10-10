@@ -1,6 +1,6 @@
 export const KEY = 'random_event_director_v1';
 export const DEFAULTS = Object.freeze({ enabled: false, triggerProbability: 25, fixedRoundEnabled: false, fixedRoundInterval: 5, targetCount: 10,
-    refillThreshold: 2, expiryTurns: 10, majorEventTurns: 5, contextMessages: 16, contextChars: 24000, includeHiddenMessages: false, useMainPromptContext: false, hideDice: false,
+    refillThreshold: 2, expiryTurns: 10, majorEventTurns: 5, diceMode: 'pool', contextMessages: 16, contextChars: 24000, includeHiddenMessages: false, useMainPromptContext: false, hideDice: false,
     timeoutSeconds: 45, useCurrentModel: true, outgoingInjection: true, injectionMode: 'user', forceInjection: false, model: '', worldNotes: '', directorPreset: null, headerPreset: Object.freeze(builtinHeaderReference()) });
 const REPLAY = new Set(['regenerate', 'swipe', 'continue', 'append']);
 const ALLOWED = new Set(['normal', 'regenerate', 'swipe', 'continue', 'append']);
@@ -11,6 +11,7 @@ export function config(raw = {}) {
         triggerProbability: clamp(raw.triggerProbability, 25, 0, 100),
         fixedRoundEnabled: raw.fixedRoundEnabled === true,
         fixedRoundInterval: clamp(raw.fixedRoundInterval, 5, 1, 100),
+        diceMode: raw.diceMode === 'instant' ? 'instant' : 'pool',
         targetCount: clamp(raw.targetCount, 10, 1, 20), refillThreshold: clamp(raw.refillThreshold, 2, 0, 19),
         expiryTurns: clamp(raw.expiryTurns, 10, 5, 10), majorEventTurns: clamp(raw.majorEventTurns, 5, 1, 20), contextMessages: clamp(raw.contextMessages, 16, 1, 40),
         contextChars: clamp(raw.contextChars, 24000, 1000, 60000),
@@ -183,6 +184,7 @@ export class Director {
         if (!s || this.disposed || this.busy || this.fill || this.discussion?.guideTask) return false;
         if (enable && !s.enabled) { s.enabled = true; this.save(ctx, s); }
         if (!s.enabled) return false;
+        if (s.generationFailure?.target === 'instant') return this.rollInstant();
         const done = s.generationFailure?.target === 'guide' && s.discussion.guide
             ? await this.discussion?.prepareGuide() : await this.refill(true);
         if (!done || this.context().chatMetadata !== ctx.chatMetadata || chatIdentity(this.context()) !== s.owner) return false;
@@ -194,6 +196,9 @@ export class Director {
         const next = config({ ...s, ...values });
         const modeChanged = next.injectionMode !== s.injectionMode || next.forceInjection !== s.forceInjection;
         const contextChanged = next.useMainPromptContext !== s.useMainPromptContext;
+        const diceModeChanged = next.diceMode !== s.diceMode;
+        if (diceModeChanged && (this.busy || s.majorEvent)) throw new Error('请先结束当前重大事件，并等待主聊天生成结束后切换投掷方式');
+        if (diceModeChanged) { this.cancelFill(); s.refillAttempt = null; }
         if ((modeChanged || contextChanged) && this.busy) throw new Error('请等待当前生成结束后再切换事件注入或提示词读取方式');
         if (contextChanged) {
             this.cancelFill(); s.refillAttempt = null;
@@ -217,7 +222,7 @@ export class Director {
         return [ordinary, majorInjection(s.majorEvent)].filter(Boolean).join('\n\n');
     }
     beginMajor(ctx, s, event) {
-        if (s.majorEvent || event?.severity !== 'major') return false;
+        if (s.diceMode === 'instant' || event?.instant || s.majorEvent || event?.severity !== 'major') return false;
         this.cancelFill();
         s.majorEvent = { id: event.id, event: { ...event }, duration: s.majorEventTurns, remaining: s.majorEventTurns, started: false,
             previousPool: { events: s.eventPool.slice(), generated: s.poolGenerated, turn: s.eventPoolGenerationTurn,
@@ -310,6 +315,7 @@ export class Director {
         if (!replace && s.refillStopped) {
             this.trace('事件池生成', 'skip', '上次事件生成失败，已停止自动生成，等待用户手动重试。', {}, s.owner, ''); return false;
         }
+        if (!replace && s.diceMode === 'instant') return false;
         const turn = assistantTurns(ctx.chat);
         const expired = this.poolExpired(ctx, s), focusId = s.majorEvent?.id || '';
         const focusChanged = s.poolFocusId !== focusId;
@@ -459,7 +465,7 @@ export class Director {
             this.trace('注入条件', 'skip', '重生成或续写的原消息没有事件记录，不新抽事件。'); return;
         }
         if (!cycle) {
-            if (this.poolExpired(ctx, s)) {
+            if (s.diceMode !== 'instant' && !s.pendingEvent?.event.instant && this.poolExpired(ctx, s)) {
                 if (s.eventPool.length) this.trace('事件池过期', 'info', '普通候选事件池已到保留回合，清空旧候选。'); s.eventPool = [];
             }
             let event = null, guideId = null;
@@ -467,7 +473,7 @@ export class Director {
             if (s.pendingEvent && !s.pendingEvent.cycleKey) {
                 event = s.pendingEvent.event; guideId = s.pendingEvent.guideId || null;
                 this.trace('事件选择', 'success', '使用“立即掷骰”提前选好的待用事件。');
-            } else {
+            } else if (s.diceMode !== 'instant') {
                 const roll = s.fixedRoundEnabled ? null : this.rng(10000);
                 const triggered = s.fixedRoundEnabled ? s.fixedRoundProgress + 1 >= s.fixedRoundInterval : roll < s.triggerProbability * 100;
                 this.trace(s.fixedRoundEnabled ? '固定回合判定' : '随机判定', triggered ? 'success' : 'skip', s.fixedRoundEnabled
@@ -486,7 +492,7 @@ export class Director {
             }
             if (event) {
                 event.status = 'pending';
-                s.eventPool = s.eventPool.filter(e => e.id !== event.id);
+                if (!event.instant) s.eventPool = s.eventPool.filter(e => e.id !== event.id);
                 this.beginMajor(ctx, s, event);
                 s.pendingEvent = { cycleKey: key, event, guideId, majorId: s.majorEvent?.id || null };
             }
@@ -496,7 +502,7 @@ export class Director {
             if (event) this.trace('事件绑定', 'success', '已选定一个事件并生成本轮隐藏提示词。', { characters: injection.length });
             cycle = s.cycles[key] = { event, injection, guideId, status: 'pending', createdAt: this.now(),
                 majorId: s.majorEvent?.id || null,
-                fixedRound: s.fixedRoundEnabled, fixedInterval: s.fixedRoundInterval };
+                fixedRound: s.diceMode !== 'instant' && s.fixedRoundEnabled, fixedInterval: s.fixedRoundInterval };
             this.save(ctx, s);
         } else {
             // An empty reroll can remove the side event from a stopped turn.
@@ -679,6 +685,7 @@ export class Director {
     }
     async reroll({ enable = false } = {}) {
         const ctx = this.context(), s = this.state(ctx);
+        if (s?.diceMode === 'instant') return this.rollInstant();
         if (!s || this.disposed || this.busy || (this.fill && !(s.majorEvent && !s.majorEvent.started)) || this.discussion?.guideTask) return false;
         if (enable && !s.enabled) { s.enabled = true; this.save(ctx, s); }
         if (!s.enabled) return false;
@@ -705,6 +712,7 @@ export class Director {
     async rollNow({ enable = false, allowPrepare = true } = {}) {
         this.trace('手动掷骰', 'info', '用户点击立即掷骰；这里只准备事件，要正常发送消息才会注入。', {}, undefined, '');
         const ctx = this.context(), s = this.state(ctx);
+        if (s?.diceMode === 'instant') return this.rollInstant();
         // Enable without starting update()'s background refill: this roll owns the empty-pool request.
         if (enable && s && !this.busy && !s.enabled) { s.enabled = true; this.save(ctx, s); }
         if (!s?.enabled || this.busy) { this.trace('手动掷骰', 'skip', '当前聊天未开启导演，或主 AI 正在生成。', {}, s?.owner, ''); return false; }
@@ -732,6 +740,56 @@ export class Director {
         if (beganMajor) void this.refill(true);
         return true;
     }
+    async rollInstant() {
+        const ctx = this.context(), s = this.state(ctx);
+        if (!s?.enabled || this.disposed || this.busy || this.fill || this.discussion?.guideTask) return false;
+        if (s.majorEvent) throw new Error('请先结束当前重大事件，再投掷即时情境事件');
+        const settings = structuredClone(s), contextKey = instantContextKey(ctx, settings);
+        // This snapshot only feeds the request. None of its candidates are written into metadata.
+        settings.eventPool = []; settings.cycles = {}; settings.majorEvent = null;
+        const controller = new AbortController(), epoch = this.epoch;
+        const task = { controller, epoch, owner: s.owner, kind: 'instant' };
+        this.fill = task; s.error = '';
+        this.trace('即时情境生成', 'info', '读取当前情境生成临时候选；抽取后不保存候选池。', { count: settings.targetCount }, s.owner, '');
+        this.save(ctx, s);
+        let timer;
+        const current = () => !this.disposed && !controller.signal.aborted && epoch === this.epoch
+            && this.context().chatMetadata === ctx.chatMetadata && chatIdentity(this.context()) === s.owner && s.enabled;
+        try {
+            const response = await Promise.race([(async () => {
+                const messages = await this.poolMessages(ctx, settings, settings.targetCount, controller.signal);
+                messages.push({ role: 'system', content: instantEventInstruction(settings.targetCount) });
+                if (!current()) throw new Error('即时情境生成已取消');
+                return this.request(ctx, messages, settings, controller.signal);
+            })(), new Promise((_, reject) => { timer = setTimeout(() => {
+                controller.abort(); reject(new Error('副 AI 超时；正常聊天可继续'));
+            }, settings.timeoutSeconds * 1000); })]);
+            if (!current()) return false;
+            if (this.busy || instantContextKey(this.context(), settings) !== contextKey) throw new Error('准备期间聊天内容已变化，请重新投掷即时情境事件');
+            const candidates = parseEvents(response, settings.targetCount, this.makeId);
+            const event = choose(candidates, this.rng);
+            event.instant = true; event.severity = 'ordinary'; event.status = 'pending';
+            const key = s.pendingEvent?.cycleKey || (this.run?.metadata === ctx.chatMetadata
+                && s.cycles[this.run.cycleKey]?.status === 'pending' ? this.run.cycleKey : null);
+            this.discardPending(ctx, s);
+            const injection = hiddenPrompt(event, settings.directorPreset, ctx);
+            s.pendingEvent = { cycleKey: key, event, injection };
+            if (key && s.cycles[key]) Object.assign(s.cycles[key], { event, injection, guideId: null,
+                majorId: null, fixedRound: false });
+            s.refillStopped = false; s.generationFailure = null; s.error = '';
+            this.trace('即时情境就绪', 'success', '已随机抽取一个一次性事件；临时候选已丢弃，原普通事件池保留。',
+                { eventId: event.id, candidates: candidates.length }, s.owner, '');
+            this.save(ctx, s); return true;
+        } catch (e) {
+            if (!this.disposed && epoch === this.epoch && this.context().chatMetadata === ctx.chatMetadata && s.owner === chatIdentity(this.context()) && s.enabled) {
+                this.generationFailed(ctx, s, e, 'instant');
+                this.fail(new Error(`${String(e.message || e)}；已停止自动生成，请手动重试。`));
+            }
+            return false;
+        } finally {
+            clearTimeout(timer); if (this.fill === task) this.fill = null; this.changed();
+        }
+    }
     dispose() { this.disposed = true; this.runAbortCleanup?.(); this.runAbortCleanup = null; this.discussion?.cancel(); this.cancelFill(); this.clear(); this.run = null; this.mainPromptSnapshots = new WeakMap(); }
 }
 import { activePreset, generatorText, injectionText, normalizePreset } from './presets.js';
@@ -739,3 +797,5 @@ import { activeHeader, normalizeHeader, headerMessages, builtinHeaderReference }
 import { discussionState } from './discussion-state.js';
 import { PERSONA_PREFERENCES_KEY } from './personas.js';
 import { majorPoolInstruction, majorInjection, majorTurnEvent } from './major-events.js';
+
+import { instantEventInstruction, instantContextKey } from './instant-events.js';

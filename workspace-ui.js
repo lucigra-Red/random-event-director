@@ -3,6 +3,7 @@ import { makeDraggable, placeWidget, visibleViewport } from './window-placement.
 import { PERSONAS, PERSONA_PREFERENCES_KEY, discussionPersona, normalizePersona } from './personas.js';
 import { mountUpdateUI } from './update-ui.js';
 import { CURRENT_VERSION } from './updates.js';
+import { foldSettingsHelp } from './settings-layout.js';
 
 const WORKSPACE_KEY = 'random_event_director_workspace_ui_v1';
 const WINDOW_SIZES = new Set(['small', 'medium', 'large']);
@@ -40,17 +41,22 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     diceDock.innerHTML = `<aside class="red-major-status" data-major-card hidden aria-label="当前重大事件"><small>重大事件</small><strong data-major-role="title"></strong><span data-major-role="turns" aria-live="polite"></span><button type="button" data-major-action="end">结束重大事件</button></aside><button type="button" class="red-floating-die" aria-label="投掷十面骰，启用一个事件">${D10}</button><span class="red-dice-feedback" role="status" aria-live="polite"></span>`;
     const eventWindow = doc.createElement('section'); eventWindow.id = 'red_director_event_window'; eventWindow.hidden = true;
     eventWindow.setAttribute('role', 'dialog'); eventWindow.setAttribute('aria-label', '本轮随机事件');
-    eventWindow.innerHTML = `<header class="red-mini-head"><span>☾ <span data-mini="label">本轮随机事件</span></span><button type="button" data-mini-action="close" aria-label="关闭事件小窗">×</button></header><div class="red-mini-body"><h3 data-mini="title"></h3><p data-mini="hint"></p><details data-mini="reveal" hidden><summary>查看事件内容（可能剧透）</summary><p data-mini="content"></p></details><p data-mini="notice" role="status" aria-live="polite"></p><div class="red-mini-failure-actions" data-mini="failure-actions" hidden><button type="button" data-mini-action="retry">重试生成</button><button type="button" data-mini-action="logs">查看日志</button></div></div><footer><button type="button" data-mini-action="pool">完整事件池</button><button type="button" data-mini-action="director">打开导演系统</button></footer>`;
+    eventWindow.innerHTML = `<header class="red-mini-head"><div class="red-mini-titlebar"><span>☾ <span data-mini="label">本轮随机事件</span></span><button type="button" data-mini-action="director">打开导演系统 <span aria-hidden="true">↗</span></button><button type="button" data-mini-action="close" aria-label="关闭事件小窗">×</button></div><div class="red-mini-toolbar"><label class="red-mini-toggle"><input type="checkbox" data-mini="enabled"> 开启随机事件</label><button type="button" class="red-mini-mode-stack" data-mini="dice-mode" data-mini-action="switch-mode" data-mode="pool" aria-label="切换投掷方式，当前常规投掷"><span class="red-mini-mode-card" data-mode-card="pool" aria-hidden="true"><strong>常规投掷</strong><small>从当前事件池中抽取</small></span><span class="red-mini-mode-card" data-mode-card="instant" aria-hidden="true"><strong>即时投掷</strong><small>围绕眼前情境，即时生成并抽取</small></span></button></div></header><div class="red-mini-body"><div class="red-mini-event"><h3 data-mini="title"></h3><p data-mini="hint"></p><details data-mini="reveal" hidden><summary>查看事件内容（可能剧透）</summary><p data-mini="content"></p></details><p data-mini="notice" role="status" aria-live="polite"></p><div class="red-mini-failure-actions" data-mini="failure-actions" hidden><button type="button" data-mini-action="retry">重试生成</button><button type="button" data-mini-action="logs">查看日志</button></div></div></div><footer><button type="button" data-mini-action="roll">点击投掷</button></footer>`;
+    const miniToggle = eventWindow.querySelector('.red-mini-toggle');
+    miniToggle.addEventListener('pointerdown', event => event.stopPropagation());
     doc.body.append(window, diceDock, eventWindow);
     const floatingDie = diceDock.querySelector('.red-floating-die'), diceFeedback = diceDock.querySelector('.red-dice-feedback');
+    for (const die of [floatingDie, window.querySelector('[data-window="roll"]')]) die.setAttribute('aria-label', '打开骰子事件小窗');
     const entry = doc.createElement('div'); entry.id = 'red_director_entry'; entry.className = 'inline-drawer red-extension-entry';
     entry.innerHTML = `<div class="inline-drawer-toggle inline-drawer-header"><b>导演系统-初月 <small>V${CURRENT_VERSION}</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content" style="display: none;"><p>和初月讨论剧情，或设置随机事件。</p><div class="red-entry-actions"><button class="menu_button menu_button_icon" type="button" data-launch="chat">打开导演系统</button><button class="menu_button menu_button_icon" type="button" data-launch="events">随机事件</button><button class="menu_button menu_button_icon" type="button" data-launch="settings">导演设置</button><button class="menu_button menu_button_icon" type="button" data-launch="logs">诊断日志</button></div></div>`;
     settingsHost.append(entry); window.querySelector('[data-page="settings"]').append(settings); settings.open = true;
     const get = name => window.querySelector(`[data-window-role="${name}"]`);
     const personaSettings = doc.createElement('div'); personaSettings.className = 'red-persona-settings';
-    personaSettings.innerHTML = '<label>新聊天默认人设<select data-window-role="default-persona" aria-label="新聊天默认人设"></select></label><p>只影响小窗聊天口吻。当前聊天在剧情讨论页右上角选择；修改默认值只用于尚未设置人设的新聊天。</p>';
+    personaSettings.innerHTML = '<label>新聊天默认人设<select data-window-role="default-persona" aria-label="新聊天默认人设"></select></label><p class="red-help">只影响小窗聊天口吻。当前聊天在剧情讨论页右上角选择；修改默认值只用于尚未设置人设的新聊天。</p>';
     window.querySelector('[data-page="settings"]').insertBefore(personaSettings, settings);
     const updateUI = mountUpdateUI(window, entry, context, doc);
+    settings.after(window.querySelector('.red-update-settings'));
+    foldSettingsHelp(window.querySelector('[data-page="settings"]'));
     for (const select of [get('persona'), get('default-persona')]) for (const persona of PERSONAS) {
         const option = doc.createElement('option'); option.value = persona.id; option.textContent = persona.name; select.append(option);
     }
@@ -60,7 +66,11 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     let page = 'chat', owner = null, notice = '', eventNotice = '', pendingId = null, transcriptKey = '', poolKey = '', lastFocus = null;
     let disposed = false, eventTask = null, diceAnimating = false, diceTimer = null, animationUntil = 0, shownFailureId = null;
     const mini = name => eventWindow.querySelector(`[data-mini="${name}"]`);
-    function reflow() { for (const widget of [window, diceDock, eventWindow]) placeWidget(widget); }
+    function constrainEventWindow() { return doc.defaultView.matchMedia('(max-width: 600px), (pointer: coarse)').matches; }
+    function reflow() {
+        for (const widget of [window, diceDock]) placeWidget(widget);
+        placeWidget(eventWindow, undefined, { constrain: constrainEventWindow() });
+    }
     function setSize(size, persist = false) {
         if (!WINDOW_SIZES.has(size)) return;
         window.dataset.size = size; window.classList.remove('red-maximized');
@@ -161,32 +171,40 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         const pending = state?.pendingEvent?.event;
         if (pendingId !== (pending?.id || null)) { pendingId = pending?.id || null; get('event-reveal').open = false; mini('reveal').open = false; eventNotice = ''; }
         get('enable-events').checked = Boolean(state?.enabled); get('enable-events').disabled = !state;
+        mini('enabled').checked = Boolean(state?.enabled); mini('enabled').disabled = !state;
+        const diceMode = state?.diceMode || 'pool';
+        mini('dice-mode').dataset.mode = diceMode;
+        mini('dice-mode').setAttribute('aria-label', `切换投掷方式，当前${diceMode === 'instant' ? '即时投掷' : '常规投掷'}`);
+        mini('dice-mode').disabled = !state || director.busy || Boolean(director.fill || director.discussion?.guideTask || state.majorEvent);
         get('event-count').textContent = state ? `${state.eventPool.length} / ${state.targetCount}` : '—';
-        get('event-trigger-label').textContent = state?.fixedRoundEnabled ? '固定回合触发' : '触发概率';
-        get('event-probability').textContent = state ? (state.fixedRoundEnabled ? `每 ${state.fixedRoundInterval} 回合` : `${state.triggerProbability}%`) : '—';
+        get('event-trigger-label').textContent = state?.diceMode === 'instant' ? '即时情境' : state?.fixedRoundEnabled ? '固定回合触发' : '触发概率';
+        get('event-probability').textContent = state ? (state.diceMode === 'instant' ? '手动 · 一次' : state.fixedRoundEnabled ? `每 ${state.fixedRoundInterval} 回合` : `${state.triggerProbability}%`) : '—';
         const actionRunning = Boolean(eventTask), rolling = diceAnimating || (eventTask?.owner === currentOwner && eventTask?.action === 'roll');
         const preparing = Boolean(director.fill || director.discussion?.guideTask);
         const failure = state?.refillStopped ? state.generationFailure : null;
         const failed = Boolean(failure && !preparing && !actionRunning);
-        get('event-label').textContent = pending ? '已抽取 · 等待本轮生成' : (preparing || actionRunning ? '初月正在准备事件' : '下一次意外，尚未揭晓');
+        get('event-label').textContent = pending ? (pending.instant ? '即时情境 · 等待本轮生成' : '已抽取 · 等待本轮生成') : (preparing || actionRunning ? '初月正在准备事件' : '下一次意外，尚未揭晓');
         get('event-title').textContent = pending?.title || (state ? '让故事多一点可能' : '请先打开一个聊天');
-        get('event-hint').textContent = pending ? (state.majorEvent && pending.id === state.majorEvent.id
+        get('event-hint').textContent = pending ? (pending.instant ? '即时情境事件已准备。下一次主聊天使用一次；临时候选池已丢弃，普通池保留。' : state.majorEvent && pending.id === state.majorEvent.id
             ? `重大事件已准备，首次成功回复后开始计时，持续 ${state.majorEvent.duration} 回合。`
             : '事件已准备，将在对应的正常生成中生效；成功回复后结束本次注入。') : '保持自然的随机触发，或亲手掷骰，迎接一个小变化。';
         get('event-reveal').hidden = !pending; get('event-content').textContent = pending?.content || '';
         get('event-recent').textContent = state?.recentEvent?.title || '暂无';
+        window.querySelector('.red-event-footnote').textContent = state?.diceMode === 'instant'
+            ? '即时情境只生成当前活动相关的候选，随机抽取一次后丢弃临时池。每次投掷额外调用副 AI；不自动抽取，不启动持续推进。'
+            : '骰子打开操作小窗；勾选开启后，点击框内投掷按钮抽取事件。继续主聊天时生效，不会自动发送消息。';
         const stoppedNotice = state?.refillStopped && !preparing && !actionRunning ? '事件生成已暂停；请使用准备按钮或骰子小窗中的“重试生成”。' : '';
-        get('event-notice').textContent = state?.error || eventNotice || stoppedNotice || (!state?.enabled && state ? '点击骰子即可开启本聊天并准备一个事件。' : '');
+        get('event-notice').textContent = state?.error || eventNotice || stoppedNotice || (!state?.enabled && state ? '已暂停；在骰子小窗或上方勾选“开启随机事件”后继续。' : '');
         get('pool-notice').textContent = state?.error || eventNotice || stoppedNotice || '';
         // The die always remains draggable and can reopen the current event, even while a request is busy.
         button('roll').disabled = false; floatingDie.disabled = false;
         button('prepare-pool').disabled = !state?.enabled || director.busy || preparing || actionRunning;
         button('reroll').disabled = !state || director.busy || (preparing && !(state.majorEvent && !state.majorEvent.started && !director.discussion?.guideTask)) || actionRunning;
         button('regenerate-pool').disabled = !state?.enabled || director.busy || preparing || actionRunning;
-        get('dice-label').textContent = pending ? '本轮事件已启用' : (actionRunning || preparing ? '正在准备…' : '投掷并启用事件');
+        get('dice-label').textContent = '打开骰子小窗';
         button('roll').classList.toggle('red-is-rolling', rolling); floatingDie.classList.toggle('red-is-rolling', rolling);
         floatingDie.classList.toggle('red-die-ready', Boolean(pending));
-        const diceTitle = !state ? '请先打开一个聊天' : (pending ? '本轮事件已启用，继续主聊天即可' : (director.busy ? '主 AI 正在生成，请稍候' : (preparing || actionRunning ? '正在准备事件，请稍候' : '投掷十面骰，开启当前聊天并抽取一个事件')));
+        const diceTitle = '打开骰子小窗，查看事件或选择投掷；不会自动投掷';
         floatingDie.title = diceTitle; button('roll').title = diceTitle;
         floatingDie.setAttribute('aria-busy', String(actionRunning || preparing)); button('roll').setAttribute('aria-busy', String(actionRunning || preparing));
         diceDock.hidden = Boolean(director.settingsState()?.hideDice);
@@ -194,20 +212,26 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         diceDock.classList.toggle('red-major-active', Boolean(major));
         for (const card of [window.querySelector('[data-major-card]'), diceDock.querySelector('[data-major-card]')]) {
             card.hidden = !major;
+            card.querySelector('small').textContent = '重大事件';
             card.querySelector('[data-major-role="title"]').textContent = major?.event.title || '';
             card.querySelector('[data-major-role="turns"]').textContent = major
                 ? `${state.enabled ? '' : '已暂停 · '}剩余 ${major.remaining} / ${major.duration} 回合${major.started ? (major.remaining === 1 ? ' · 本轮收尾' : '') : ' · 等待首次生效'}` : '';
             card.querySelector('button').disabled = !major || director.busy || actionRunning;
+            card.querySelector('button').textContent = '结束重大事件';
         }
         diceFeedback.textContent = failed ? '生成失败' : (preparing || actionRunning ? '准备中…' : (pending ? '本轮已启用' : eventNotice));
         mini('label').textContent = failed ? '生成失败 · 已暂停' : get('event-label').textContent;
         mini('title').textContent = failed ? '事件未生成成功' : (preparing || actionRunning ? '正在准备事件…' : (pending?.title || (state ? '本轮暂无事件' : '请先打开一个聊天')));
-        mini('hint').textContent = failed ? `原因：${failure.message}` : (preparing || actionRunning ? '准备完成后会在这里显示抽取结果。' : (pending ? get('event-hint').textContent : (director.busy ? '主 AI 正在生成，请稍后再投掷。' : '点击骰子抽取事件，继续主聊天时生效。')));
+        mini('hint').textContent = !state?.enabled ? '已暂停。勾选上方开关后才会继续随机事件；主聊天可以正常使用。' : failed ? `原因：${failure.message}` : (preparing || actionRunning ? (director.fill?.kind === 'instant' ? '正在读取当前情境，生成临时候选并抽取一次…' : '准备完成后会在这里显示抽取结果。') : (pending ? get('event-hint').textContent : (director.busy ? '主 AI 正在生成，请稍后再投掷。' : state?.diceMode === 'instant' ? '每次投掷重新读取当前情境，临时生成并抽取一次。战斗只围绕战斗，约会只围绕约会；不会保存池子。' : '点击下方按钮抽取，继续主聊天时生效。')));
         mini('reveal').hidden = !pending || failed || preparing || actionRunning; mini('content').textContent = pending?.content || '';
         mini('notice').textContent = failed ? `已停止自动重试。${pending ? '原先已抽取的事件保留。' : ''}正常聊天可继续；要重新生成，请点击下方按钮。` : (preparing || actionRunning ? '' : (state?.error || eventNotice || stoppedNotice));
         mini('failure-actions').hidden = !failure;
         const retry = eventWindow.querySelector('[data-mini-action="retry"]');
-        retry.disabled = !state || director.busy || preparing || actionRunning;
+        retry.disabled = !state?.enabled || director.busy || preparing || actionRunning;
+        const rollMini = eventWindow.querySelector('[data-mini-action="roll"]');
+        rollMini.textContent = '点击投掷';
+        rollMini.disabled = !state?.enabled || (pending ? button('reroll').disabled
+            : director.busy || preparing || actionRunning || Boolean(failure));
         retry.textContent = preparing || actionRunning ? '正在重试…' : '重试生成';
         if (!failure) shownFailureId = null;
         const showFailure = failed && shownFailureId !== failure.id;
@@ -217,10 +241,11 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         if (page === 'logs') diagnosticsUI.refresh();
     }
     async function eventAction(action) {
+        if (action === 'open-dice') { showEvent(); return; }
         if (action === 'roll' || action === 'retry') showEvent();
         const state = director.state(), currentOwner = state?.owner;
         const cancellingMajor = action === 'end-major' || (action === 'reroll' && state?.majorEvent && !state.majorEvent.started);
-        if (!state || eventTask || director.busy || (!cancellingMajor && (director.fill || director.discussion?.guideTask)) || (action === 'roll' && (state.pendingEvent || (state.refillStopped && state.generationFailure)))) return;
+        if (!state || (!state.enabled && !cancellingMajor) || eventTask || director.busy || (!cancellingMajor && (director.fill || director.discussion?.guideTask)) || (action === 'roll' && (state.pendingEvent || (state.refillStopped && state.generationFailure)))) return;
         const token = { action, owner: currentOwner }; eventTask = token;
         if (action === 'roll' || action === 'reroll') {
             diceAnimating = true; animationUntil = Date.now() + 650;
@@ -229,15 +254,16 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         }
         try {
             eventNotice = action === 'roll' ? '正在投掷并准备事件…' : '正在更新事件池…';
-            const task = action === 'end-major' ? director.endMajor() : action === 'retry' ? director.retryGeneration({ enable: true })
-                : action === 'reroll' ? director.reroll({ enable: true })
+            const task = action === 'end-major' ? director.endMajor() : action === 'retry' ? director.retryGeneration()
+                : action === 'reroll' ? director.reroll()
                     : action === 'regenerate-pool' ? director.regeneratePool()
-                        : action === 'roll' ? director.rollNow({ enable: true }) : director.refill(true); refresh();
+                        : action === 'roll' ? director.rollNow() : director.refill(true); refresh();
             const done = await task;
             if (disposed || director.state()?.owner !== currentOwner) return;
             refresh();
                 const current = director.state();
-                eventNotice = action === 'end-major' && done ? '重大事件已结束，恢复普通随机事件。' : done ? (!['prepare-pool', 'regenerate-pool'].includes(action) ? '本轮事件已启用，继续主聊天即可。' : '事件池已更新，等待故事的下一幕。')
+                eventNotice = action === 'end-major' && done ? '当前事件线已结束，恢复普通事件池。' : done ? (!['prepare-pool', 'regenerate-pool'].includes(action)
+                    ? '本轮事件已启用，继续主聊天即可。' : '事件池已更新，等待故事的下一幕。')
                     : current?.poolGenerated && !current.eventPool.length && !current.discussion.guide && !current.refillStopped
                         ? '事件池已用完，请等待更新回合，或手动更新事件池。' : '本次未启用新事件，请检查连接或稍后重试。';
         } catch (e) { if (!disposed && director.state()?.owner === currentOwner) eventNotice = e.message; }
@@ -272,7 +298,8 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
             else if (action === 'cancel-guide') director.discussion.cancelGuide();
             else if (action === 'retry-guide') void director.discussion.prepareGuide();
             else if (action === 'clear') director.discussion.clearHistory();
-            else if (['roll', 'reroll', 'prepare-pool', 'regenerate-pool', 'end-major'].includes(action)) { void eventAction(action); return; }
+            else if (action === 'roll') { showEvent(); return; }
+            else if (['reroll', 'prepare-pool', 'regenerate-pool', 'end-major'].includes(action)) { void eventAction(action); return; }
         } catch (e) { notice = e.message; }
         refresh();
     }
@@ -280,7 +307,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(); }
     };
     const launch = event => { const target = event.target.closest('[data-launch]'); if (target) open(target.dataset.launch); };
-    const throwDice = () => { void eventAction('roll'); };
+    const throwDice = () => { showEvent(); };
     const change = event => {
         try {
             if (event.target === get('enable-events')) director.update({ enabled: event.target.checked });
@@ -298,19 +325,34 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
     const head = window.querySelector('header');
     const stopMainDrag = makeDraggable(window, head, { canDrag: () => !window.classList.contains('red-maximized') });
     const stopDiceDrag = makeDraggable(diceDock, floatingDie, { ignoreButtons: false });
-    const stopEventDrag = makeDraggable(eventWindow, eventWindow.querySelector('header'));
+    const stopEventDrag = makeDraggable(eventWindow, eventWindow.querySelector('header'), { constrain: constrainEventWindow });
     const miniClick = event => {
         const action = event.target.closest('[data-mini-action]')?.dataset.miniAction;
         if (action === 'close') eventWindow.hidden = true;
+        else if (action === 'switch-mode') {
+            try { director.update({ diceMode: director.state()?.diceMode === 'instant' ? 'pool' : 'instant' }); eventNotice = ''; }
+            catch (e) { eventNotice = e.message; }
+            refresh();
+        }
+        else if (action === 'roll') void eventAction(director.state()?.pendingEvent ? 'reroll' : 'roll');
         else if (action === 'retry') void eventAction('retry');
         else if (action === 'logs') { eventWindow.hidden = true; open('logs'); }
-        else if (action === 'pool' || action === 'director') { eventWindow.hidden = true; open(action === 'pool' ? 'pool' : 'events'); }
+        else if (action === 'director') { eventWindow.hidden = true; open('events'); }
+    };
+    const miniChange = event => {
+        if (event.target !== mini('enabled')) return;
+        try {
+            director.update({ enabled: event.target.checked }); eventNotice = event.target.checked ? '' : '随机事件已暂停';
+        }
+        catch (e) { eventNotice = e.message; }
+        refresh();
     };
     window.addEventListener('click', click); window.addEventListener('change', change); input.addEventListener('keydown', keydown); entry.addEventListener('click', launch);
     floatingDie.addEventListener('click', throwDice);
     const majorEnd = () => { void eventAction('end-major'); };
     diceDock.querySelector('[data-major-action="end"]').addEventListener('click', majorEnd);
     eventWindow.addEventListener('click', miniClick);
+    eventWindow.addEventListener('change', miniChange);
     doc.defaultView.addEventListener('resize', reflow);
     doc.defaultView.visualViewport?.addEventListener('resize', reflow);
     doc.defaultView.visualViewport?.addEventListener('scroll', reflow);
@@ -330,6 +372,7 @@ export function mountWorkspace(director, context, settings, settingsHost, doc = 
         doc.defaultView.visualViewport?.removeEventListener('scroll', reflow);
         diceDock.querySelector('[data-major-action="end"]').removeEventListener('click', majorEnd);
         eventWindow.removeEventListener('click', miniClick); eventWindow.remove();
+        eventWindow.removeEventListener('change', miniChange);
         floatingDie.removeEventListener('click', throwDice); diceDock.remove();
         diagnosticsUI.dispose();
         updateUI.dispose();
