@@ -4,7 +4,10 @@ export function mountPresetUI(host, director, context, doc) {
     host.innerHTML = `<details class="red-presets"><summary>导演预设管理</summary>
       <div class="red-body"><p data-preset-role="active"></p>
       <label class="red-column">选择预设<select class="text_pole" data-preset-field="selected"></select></label>
+      <div class="red-actions"><button type="button" class="menu_button" data-preset-action="import">导入 JSON</button></div>
+      <input type="file" accept=".json,application/json" data-preset-field="file" hidden>
       <p class="red-help" data-preset-role="scope"></p>
+      <p data-preset-role="notice" aria-live="polite"></p>
       <label class="red-column">预设名称<input class="text_pole" data-preset-field="name" maxlength="80"></label>
       <label class="red-column">副 AI 事件生成提示词<textarea class="text_pole" rows="7" data-preset-field="generatorPrompt"></textarea></label>
       <label class="red-column">主 AI 隐藏注入模板<textarea class="text_pole" rows="7" data-preset-field="injectionTemplate"></textarea></label>
@@ -14,17 +17,14 @@ export function mountPresetUI(host, director, context, doc) {
       <button type="button" class="menu_button" data-preset-action="copy">另存为</button>
       <button type="button" class="menu_button" data-preset-action="reset">恢复默认</button>
       <button type="button" class="menu_button" data-preset-action="delete">删除选中预设</button></div>
-      <details><summary>导入 / 导出 JSON</summary><div class="red-body">
+      <details><summary>导出 JSON</summary><div class="red-body">
       <div class="red-actions"><button type="button" class="menu_button" data-preset-action="export">导出选中</button>
       <button type="button" class="menu_button" data-preset-action="export-all">导出全部自定义预设</button>
       <button type="button" class="menu_button" data-preset-action="download">下载 JSON</button></div>
-      <label class="red-column">预设 JSON<textarea class="text_pole" rows="6" data-preset-field="json" placeholder="粘贴导演预设 JSON，或使用下面的文件导入"></textarea></label>
-      <button type="button" class="menu_button" data-preset-action="import">导入上述 JSON</button>
-      <label class="red-column">导入预设文件<input type="file" accept=".json,application/json" data-preset-field="file"></label>
-      <p class="red-help">导入只新增，同名自动编号；不会覆盖已有预设或自动应用。默认预设可另存，不能覆盖或删除。</p>
+      <label class="red-column">导出内容<textarea class="text_pole" rows="6" data-preset-field="json" readonly placeholder="点击上方导出按钮生成 JSON，可复制或下载"></textarea></label>
       </div></details><div class="red-add"><button type="button" class="menu_button" data-preset-action="new">添加自定义导演预设</button>
       <p class="red-help">创建一个新预设，在上方填写名称和提示词，再点击保存。</p></div>
-      <p data-preset-role="notice" aria-live="polite"></p></div></details>`;
+      </div></details>`;
     const root = host.querySelector('.red-presets'), get = key => root.querySelector(`[data-preset-field="${key}"]`);
     const role = key => root.querySelector(`[data-preset-role="${key}"]`);
     let draft = { ...DEFAULT_PRESET }, owner = null, snapshot = '', disposed = false;
@@ -83,10 +83,12 @@ export function mountPresetUI(host, director, context, doc) {
                 refresh(); paint(); role('notice').textContent = director.state() ? '已载入编辑器；点击“应用到本聊天”后生效。' : '已载入编辑器；点击“设为新聊天默认”后生效。';
             } else if (key === 'file' && event.target.files?.[0]) {
                 const file = event.target.files[0], origin = director.state()?.owner;
-                if (file.size > 1500000) throw new Error('预设文件不能超过 1.5 MB');
-                const source = await file.text();
-                if (disposed || director.state()?.owner !== origin) return;
-                imported(source); event.target.value = '';
+                try {
+                    if (file.size > 1500000) throw new Error('预设文件不能超过 1.5 MB');
+                    const source = await file.text();
+                    if (disposed || director.state()?.owner !== origin) return;
+                    imported(source);
+                } finally { event.target.value = ''; }
             } else if (['name', 'generatorPrompt', 'injectionTemplate'].includes(key)) {
                 draft[key] = event.target.value;
             }
@@ -112,7 +114,7 @@ export function mountPresetUI(host, director, context, doc) {
             } else if (action === 'export' || action === 'export-all') {
                 get('json').value = director.presets.exportJSON(action === 'export' ? read() : null);
                 role('notice').textContent = 'JSON 已写入下方文本框，可复制或下载。';
-            } else if (action === 'import') imported(get('json').value);
+            } else if (action === 'import') get('file').click();
             else if (action === 'download') {
                 const data = get('json').value || director.presets.exportJSON(read());
                 const url = URL.createObjectURL(new Blob([data], { type: 'application/json;charset=utf-8' }));
